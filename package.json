@@ -1,0 +1,53 @@
+{
+  "name": "huly-cli",
+  "version": "0.1.0",
+  "description": "CLI for the Huly Platform API with JSON-first output",
+  "keywords": [
+    "huly",
+    "cli",
+    "automation",
+    "api",
+    "ai-agent"
+  ],
+  "homepage": "https://github.com/NexVar/huly-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NexVar/huly-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NexVar/huly-cli/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "huly": "./dist/bin/huly.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/bin/huly.ts",
+    "test": "tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@hcengineering/api-client": "^0.7.19",
+    "@hcengineering/collaborator-client": "^0.7.18",
+    "@hcengineering/contact": "^0.7.0",
+    "@hcengineering/core": "^0.7.26",
+    "@hcengineering/rank": "^0.7.0",
+    "@hcengineering/task": "^0.7.0",
+    "@hcengineering/text": "^0.7.19",
+    "@hcengineering/text-markdown": "^0.7.21",
+    "@hcengineering/tracker": "^0.7.0",
+    "commander": "^14.0.3",
+    "dotenv": "^17.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3"
+  }
+}
