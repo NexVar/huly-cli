@@ -1,6 +1,6 @@
-# holy-io-cli
+# huly-cli
 
-Temporary README for `holy-io-cli`.
+Temporary README for `huly-cli`.
 
 Details, usage, and project scope will be added soon.
 
