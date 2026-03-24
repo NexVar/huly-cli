@@ -1,13 +1,15 @@
 import { markdown } from '@hcengineering/api-client'
+import chunter, { type ChatMessage } from '@hcengineering/chunter'
 import contact, { AvatarType, getPersonBySocialKey, type Person as HulyPerson } from '@hcengineering/contact'
-import core, { SocialIdType, SortingOrder, buildSocialIdString, generateId, type Ref, type Status } from '@hcengineering/core'
+import core, { SocialIdType, SortingOrder, buildSocialIdString, generateId, type Class, type Doc, type Ref, type Space, type Status } from '@hcengineering/core'
 import document, { getFirstRank, type Document as HulyDocument, type Teamspace } from '@hcengineering/document'
 import { makeRank } from '@hcengineering/rank'
 import task from '@hcengineering/task'
-import tracker, { IssuePriority, MilestoneStatus, type Issue, type Milestone, type Project } from '@hcengineering/tracker'
+import tags, { type TagElement, type TagReference } from '@hcengineering/tags'
+import tracker, { IssuePriority, MilestoneStatus, type Component, type Issue, type Milestone, type Project } from '@hcengineering/tracker'
 import type { HulyClient } from './client'
 import { CliError } from './output'
-import type { ChannelSummary, DocumentSummary, IssueSummary, MemberSummary, MilestoneSummary, PersonSummary, ProjectSummary, TeamspaceSummary } from './types'
+import type { ChannelSummary, CommentSummary, ComponentSummary, DocumentSummary, IssueSummary, LabelSummary, MemberSummary, MilestoneSummary, PersonSummary, ProjectSummary, TeamspaceSummary } from './types'
 
 const ISSUE_PRIORITY_LABELS: Record<number, string> = {
   [IssuePriority.NoPriority]: 'NoPriority',
@@ -425,12 +427,173 @@ async function loadStatusForProject(client: HulyClient, projectId: Ref<Project>,
   return status._id
 }
 
-async function mapIssue(client: HulyClient, issue: Issue, includeDescription: boolean): Promise<IssueSummary> {
+async function listIssueLabelReferences(client: HulyClient, issueId: Ref<Issue>): Promise<TagReference[]> {
+  return await client.findAll(tags.class.TagReference, { attachedTo: issueId as never }, {
+    limit: 100,
+    sort: { title: SortingOrder.Ascending }
+  })
+}
+
+async function getLabelByTitle(client: HulyClient, title: string): Promise<TagElement> {
+  const labels = await client.findAll(tags.class.TagElement, { targetClass: tracker.class.Issue }, {
+    limit: 500,
+    sort: { title: SortingOrder.Ascending }
+  })
+  const label = labels.find((entry) => normalizeString(entry.title) === normalizeString(title))
+
+  if (!label) {
+    throw new CliError('NOT_FOUND', `Label '${title}' not found`, 3)
+  }
+
+  return label
+}
+
+async function assignLabelReference(client: HulyClient, issue: Issue, label: TagElement): Promise<void> {
+  const existing = await client.findOne(tags.class.TagReference, {
+    attachedTo: issue._id as never,
+    tag: label._id as never
+  })
+
+  if (existing) {
+    return
+  }
+
+  await client.addCollection(
+    tags.class.TagReference,
+    issue.space as Ref<any>,
+    issue._id,
+    tracker.class.Issue,
+    'labels',
+    {
+      tag: label._id,
+      title: label.title,
+      color: label.color
+    } as never
+  )
+}
+
+async function assignLabelsByTitle(client: HulyClient, issue: Issue, titles: string[]): Promise<void> {
+  for (const title of titles) {
+    const label = await getLabelByTitle(client, title)
+    await assignLabelReference(client, issue, label)
+  }
+}
+
+async function resolveMilestoneRef(
+  client: HulyClient,
+  projectId: Ref<Project>,
+  label: string | undefined
+): Promise<Ref<Milestone> | null | undefined> {
+  if (label === undefined) {
+    return undefined
+  }
+
+  const milestones = await client.findAll(tracker.class.Milestone, { space: projectId }, {
+    limit: 500,
+    sort: { label: SortingOrder.Ascending }
+  })
+  const milestone = milestones.find((entry) => normalizeString(entry.label) === normalizeString(label))
+
+  if (!milestone) {
+    throw new CliError('NOT_FOUND', `Milestone '${label}' not found`, 3)
+  }
+
+  return milestone._id
+}
+
+function mapLabelSummary(label: TagElement): LabelSummary {
+  return {
+    id: label._id,
+    title: label.title,
+    color: label.color,
+    description: normalizeOptionalString(label.description)
+  }
+}
+
+async function mapComponentSummary(
+  client: HulyClient,
+  component: Component
+): Promise<ComponentSummary> {
+  const description = component.description
+    ? await client.fetchMarkup(component._class, component._id, 'description', component.description as never, 'markdown')
+    : null
+
+  return {
+    id: component._id,
+    label: component.label,
+    description
+  }
+}
+
+async function getAuthorNameMap(client: HulyClient, ids: string[]): Promise<Map<string, string>> {
+  const uniqueIds = Array.from(new Set(ids))
+
+  if (uniqueIds.length === 0) {
+    return new Map()
+  }
+
+  const people = await client.findAll(contact.class.Person, {
+    _id: { $in: uniqueIds as never[] }
+  }, {
+    limit: uniqueIds.length
+  })
+
+  return new Map(people.map((person) => [person._id, person.name]))
+}
+
+async function mapCommentSummary(
+  client: HulyClient,
+  comment: ChatMessage,
+  authorNames: Map<string, string>
+): Promise<CommentSummary> {
+  const message = await client.fetchMarkup(comment._class, comment._id, 'message', comment.message as never, 'markdown')
+
+  return {
+    id: comment._id,
+    message,
+    author: authorNames.get(comment.modifiedBy) ?? comment.modifiedBy,
+    createdOn: timestampToIso(comment.createdOn ?? comment.modifiedOn)
+  }
+}
+
+async function resolveCommentTarget(
+  client: HulyClient,
+  value: string
+): Promise<{ id: Ref<Doc>, objectClass: Ref<Class<Doc>>, space: Ref<Space> }> {
+  const issue = await client.findOne(tracker.class.Issue, { identifier: value })
+
+  if (issue) {
+    return {
+      id: issue._id as Ref<Doc>,
+      objectClass: issue._class as Ref<Class<Doc>>,
+      space: issue.space as Ref<Space>
+    }
+  }
+
+  const doc = await client.findOne(document.class.Document, { _id: value as Ref<HulyDocument> })
+
+  if (doc) {
+    return {
+      id: doc._id as Ref<Doc>,
+      objectClass: doc._class as Ref<Class<Doc>>,
+      space: doc.space as Ref<Space>
+    }
+  }
+
+  throw new CliError('NOT_FOUND', `Comment target '${value}' not found`, 3)
+}
+
+async function mapIssue(
+  client: HulyClient,
+  issue: Issue,
+  options: { includeDescription: boolean, includeLabels: boolean }
+): Promise<IssueSummary> {
   const hydrated = await client.findOne(tracker.class.Issue, { _id: issue._id }, {
     lookup: {
       status: core.class.Status,
       assignee: contact.class.Person,
-      space: tracker.class.Project
+      space: tracker.class.Project,
+      milestone: tracker.class.Milestone
     }
   })
 
@@ -438,9 +601,13 @@ async function mapIssue(client: HulyClient, issue: Issue, includeDescription: bo
     throw new CliError('NOT_FOUND', `Issue '${issue.identifier}' not found`, 3)
   }
 
-  const description = includeDescription && hydrated.description
+  const description = options.includeDescription && hydrated.description
     ? await client.fetchMarkup(hydrated._class, hydrated._id, 'description', hydrated.description, 'markdown')
     : null
+  const labels = options.includeLabels
+    ? (await listIssueLabelReferences(client, hydrated._id)).map((label) => label.title)
+    : []
+  const parent = hydrated.parents[0]
 
   return {
     id: hydrated._id,
@@ -453,7 +620,11 @@ async function mapIssue(client: HulyClient, issue: Issue, includeDescription: bo
     assigneeId: hydrated.assignee ?? null,
     project: hydrated.$lookup?.space?.identifier ?? null,
     dueDate: timestampToIso(hydrated.dueDate),
-    number: hydrated.number ?? null
+    number: hydrated.number ?? null,
+    milestone: hydrated.$lookup?.milestone?.label ?? null,
+    labels,
+    parentId: parent?.parentId ?? null,
+    parentIdentifier: parent?.identifier ?? null
   }
 }
 
@@ -699,12 +870,18 @@ export async function listIssues(
     }
   })
 
-  return await Promise.all(issues.map(async (issue) => await mapIssue(client, issue, false)))
+  return await Promise.all(issues.map(async (issue) => await mapIssue(client, issue, {
+    includeDescription: false,
+    includeLabels: false
+  })))
 }
 
 export async function getIssueSummary(client: HulyClient, identifier: string): Promise<IssueSummary> {
   const issue = await getIssueByIdentifier(client, identifier)
-  return await mapIssue(client, issue, true)
+  return await mapIssue(client, issue, {
+    includeDescription: true,
+    includeLabels: true
+  })
 }
 
 export async function createIssue(
@@ -715,11 +892,23 @@ export async function createIssue(
     description?: string
     priority?: string
     assignee?: string
+    labels?: string[]
     dueDate?: string
+    parent?: string
   }
 ): Promise<IssueSummary> {
   const project = await getProjectByIdentifier(client, options.projectIdentifier)
   const assignee = await resolveAssigneeRef(client, options.assignee)
+  const parentIssue = options.parent ? await getIssueByIdentifier(client, options.parent) : undefined
+
+  if (parentIssue && parentIssue.space !== project._id) {
+    throw new CliError(
+      'VALIDATION_ERROR',
+      `Parent issue '${options.parent}' does not belong to project '${options.projectIdentifier}'`,
+      4
+    )
+  }
+
   const incrementResult = await client.updateDoc(
     tracker.class.Project,
     core.space.Space,
@@ -750,7 +939,7 @@ export async function createIssue(
       description: options.description ? markdown(options.description) : null,
       status: project.defaultIssueStatus,
       number: sequence,
-      kind: tracker.taskTypes.Issue,
+      kind: parentIssue ? tracker.taskTypes.SubIssue : tracker.taskTypes.Issue,
       identifier: `${project.identifier}-${sequence}`,
       priority: options.priority ? parsePriority(options.priority) : IssuePriority.NoPriority,
       assignee: assignee ?? null,
@@ -760,7 +949,14 @@ export async function createIssue(
       reportedTime: 0,
       reports: 0,
       subIssues: 0,
-      parents: [],
+      parents: parentIssue
+        ? [{
+            parentId: parentIssue._id,
+            identifier: parentIssue.identifier,
+            parentTitle: parentIssue.title,
+            space: parentIssue.space
+          }]
+        : [],
       childInfo: [],
       dueDate: options.dueDate ? new Date(options.dueDate).getTime() : null,
       rank: makeRank(lastIssue?.rank, undefined)
@@ -768,7 +964,14 @@ export async function createIssue(
     issueId
   )
 
-  return await getIssueSummary(client, `${project.identifier}-${sequence}`)
+  const createdIdentifier = `${project.identifier}-${sequence}`
+  const createdIssue = await getIssueByIdentifier(client, createdIdentifier)
+
+  if (options.labels && options.labels.length > 0) {
+    await assignLabelsByTitle(client, createdIssue, options.labels)
+  }
+
+  return await getIssueSummary(client, createdIdentifier)
 }
 
 export async function updateIssue(
@@ -781,6 +984,7 @@ export async function updateIssue(
     priority?: string
     assignee?: string
     dueDate?: string
+    milestone?: string
   }
 ): Promise<IssueSummary> {
   const issue = await getIssueByIdentifier(client, identifier)
@@ -810,6 +1014,10 @@ export async function updateIssue(
     operations.dueDate = new Date(updates.dueDate).getTime()
   }
 
+  if (updates.milestone !== undefined) {
+    operations.milestone = await resolveMilestoneRef(client, issue.space as Ref<Project>, updates.milestone)
+  }
+
   if (Object.keys(operations).length === 0) {
     throw new CliError('VALIDATION_ERROR', 'No issue fields were provided to update.', 4)
   }
@@ -822,6 +1030,186 @@ export async function deleteIssue(client: HulyClient, identifier: string): Promi
   const issue = await getIssueByIdentifier(client, identifier)
   await client.removeDoc(tracker.class.Issue, issue.space as Ref<Project>, issue._id)
   return { deleted: true, identifier }
+}
+
+export async function listLabels(client: HulyClient, projectIdentifier?: string): Promise<LabelSummary[]> {
+  if (!projectIdentifier) {
+    const labels = await client.findAll(tags.class.TagElement, { targetClass: tracker.class.Issue }, {
+      limit: 500,
+      sort: { title: SortingOrder.Ascending }
+    })
+
+    return labels.map(mapLabelSummary)
+  }
+
+  const project = await getProjectByIdentifier(client, projectIdentifier)
+  const issues = await client.findAll(tracker.class.Issue, { space: project._id }, {
+    limit: 10000,
+    sort: { modifiedOn: SortingOrder.Descending }
+  })
+
+  if (issues.length === 0) {
+    return []
+  }
+
+  const references = await client.findAll(tags.class.TagReference, {
+    attachedTo: { $in: issues.map((issue) => issue._id) as never[] }
+  }, {
+    limit: Math.max(issues.length * 5, 100),
+    sort: { title: SortingOrder.Ascending }
+  })
+  const labelIds = Array.from(new Set(references.map((reference) => reference.tag)))
+
+  if (labelIds.length === 0) {
+    return []
+  }
+
+  const labels = await client.findAll(tags.class.TagElement, {
+    _id: { $in: labelIds as never[] }
+  }, {
+    limit: labelIds.length,
+    sort: { title: SortingOrder.Ascending }
+  })
+
+  return labels
+    .filter((label) => label.targetClass === tracker.class.Issue)
+    .map(mapLabelSummary)
+}
+
+export async function createLabel(
+  client: HulyClient,
+  options: {
+    title: string
+    color?: number
+    description?: string
+  }
+): Promise<LabelSummary> {
+  const existing = await client.findAll(tags.class.TagElement, { targetClass: tracker.class.Issue }, {
+    limit: 500,
+    sort: { title: SortingOrder.Ascending }
+  })
+
+  if (existing.some((label) => normalizeString(label.title) === normalizeString(options.title))) {
+    throw new CliError('VALIDATION_ERROR', `Label '${options.title}' already exists`, 4)
+  }
+
+  const labelId = await client.createDoc(tags.class.TagElement, core.space.Space, {
+    title: options.title,
+    targetClass: tracker.class.Issue,
+    description: options.description ?? '',
+    color: options.color ?? 0,
+    category: tracker.category.Other
+  } as never)
+  const label = await client.findOne(tags.class.TagElement, { _id: labelId })
+
+  if (!label) {
+    throw new CliError('GENERAL_ERROR', `Failed to load created label '${options.title}'`, 1)
+  }
+
+  return mapLabelSummary(label)
+}
+
+export async function assignLabelToIssue(
+  client: HulyClient,
+  identifier: string,
+  labelTitle: string
+): Promise<{ assigned: true, issue: string, label: string }> {
+  const issue = await getIssueByIdentifier(client, identifier)
+  const label = await getLabelByTitle(client, labelTitle)
+  await assignLabelReference(client, issue, label)
+
+  return {
+    assigned: true,
+    issue: identifier,
+    label: label.title
+  }
+}
+
+export async function listComponents(client: HulyClient, projectIdentifier: string): Promise<ComponentSummary[]> {
+  const project = await getProjectByIdentifier(client, projectIdentifier)
+  const components = await client.findAll(tracker.class.Component, { space: project._id }, {
+    limit: 500,
+    sort: { label: SortingOrder.Ascending }
+  })
+
+  return await Promise.all(components.map(async (component) => await mapComponentSummary(client, component)))
+}
+
+export async function createComponent(
+  client: HulyClient,
+  options: {
+    projectIdentifier: string
+    label: string
+    description?: string
+  }
+): Promise<ComponentSummary> {
+  const project = await getProjectByIdentifier(client, options.projectIdentifier)
+  const existing = await client.findAll(tracker.class.Component, { space: project._id }, {
+    limit: 500,
+    sort: { label: SortingOrder.Ascending }
+  })
+
+  if (existing.some((component) => normalizeString(component.label) === normalizeString(options.label))) {
+    throw new CliError('VALIDATION_ERROR', `Component '${options.label}' already exists in project '${options.projectIdentifier}'`, 4)
+  }
+
+  const componentId = await client.createDoc(tracker.class.Component, project._id, {
+    label: options.label,
+    description: options.description ? markdown(options.description) : null,
+    lead: null,
+    comments: 0,
+    attachments: 0
+  } as never)
+  const component = await client.findOne(tracker.class.Component, { _id: componentId })
+
+  if (!component) {
+    throw new CliError('GENERAL_ERROR', `Failed to load created component '${options.label}'`, 1)
+  }
+
+  return await mapComponentSummary(client, component)
+}
+
+export async function listComments(client: HulyClient, target: string): Promise<CommentSummary[]> {
+  const resolvedTarget = await resolveCommentTarget(client, target)
+  const comments = await client.findAll(chunter.class.ChatMessage, {
+    attachedTo: resolvedTarget.id as never,
+    attachedToClass: resolvedTarget.objectClass as never,
+    collection: 'comments' as never
+  }, {
+    limit: 500,
+    sort: { createdOn: SortingOrder.Ascending }
+  })
+  const authorNames = await getAuthorNameMap(client, comments.map((comment) => comment.modifiedBy))
+
+  return await Promise.all(comments.map(async (comment) => await mapCommentSummary(client, comment, authorNames)))
+}
+
+export async function addComment(
+  client: HulyClient,
+  options: {
+    on: string
+    message: string
+  }
+): Promise<CommentSummary> {
+  const target = await resolveCommentTarget(client, options.on)
+  const commentId = await client.addCollection(
+    chunter.class.ChatMessage,
+    target.space,
+    target.id,
+    target.objectClass,
+    'comments',
+    {
+      message: markdown(options.message)
+    } as never
+  )
+  const comment = await client.findOne(chunter.class.ChatMessage, { _id: commentId as Ref<ChatMessage> })
+
+  if (!comment) {
+    throw new CliError('GENERAL_ERROR', `Failed to load created comment on '${options.on}'`, 1)
+  }
+
+  const authorNames = await getAuthorNameMap(client, [comment.modifiedBy])
+  return await mapCommentSummary(client, comment, authorNames)
 }
 
 export async function listMembers(client: HulyClient, limit?: number): Promise<MemberSummary[]> {

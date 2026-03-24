@@ -65,6 +65,10 @@ export type IssueSummary = {
   project: string | null
   dueDate: string | null
   number: number | null
+  milestone: string | null
+  labels: string[]
+  parentId: string | null
+  parentIdentifier: string | null
 }
 
 export type MemberSummary = {
@@ -112,4 +116,24 @@ export type MilestoneSummary = {
   status: string
   project: string | null
   targetDate: string | null
+}
+
+export type LabelSummary = {
+  id: string
+  title: string
+  color: number
+  description: string | null
+}
+
+export type ComponentSummary = {
+  id: string
+  label: string
+  description: string | null
+}
+
+export type CommentSummary = {
+  id: string
+  message: string
+  author: string
+  createdOn: string | null
 }

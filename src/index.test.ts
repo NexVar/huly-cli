@@ -1,0 +1,89 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { main } from './index'
+
+async function captureStreams(fn: () => Promise<void>): Promise<{ stdout: string, stderr: string }> {
+  let stdout = ''
+  let stderr = ''
+  const originalStdoutWrite = process.stdout.write.bind(process.stdout)
+  const originalStderrWrite = process.stderr.write.bind(process.stderr)
+
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdout += chunk.toString()
+    return true
+  }) as typeof process.stdout.write
+
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderr += chunk.toString()
+    return true
+  }) as typeof process.stderr.write
+
+  try {
+    await fn()
+  } finally {
+    process.stdout.write = originalStdoutWrite
+    process.stderr.write = originalStderrWrite
+  }
+
+  return { stdout, stderr }
+}
+
+test('main returns JSON for --help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'huly')
+  assert.ok(payload.data.commands.some((command) => command.name === 'setup-skill'))
+})
+
+test('main returns JSON for nested command help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'issue', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'issue')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+})
+
+test('main returns JSON for --version', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', '--version'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      name: string
+      version: string
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.name, 'huly')
+  assert.match(payload.data.version, /^\d+\.\d+\.\d+/)
+})

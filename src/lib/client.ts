@@ -9,7 +9,11 @@ import { generateId, type Account, type Class, type Doc, type FindOptions, type 
 import { resolveAuthConfig } from './config'
 import { createMarkupOperations } from './markup'
 import { CliError } from './output'
+import { retry } from './retry'
 import type { AuthConfig } from './types'
+
+const CONNECT_RETRIES = 2
+const CONNECT_RETRY_DELAY_MS = 250
 
 async function withSuppressedBootstrapNoise<T>(fn: () => Promise<T>): Promise<T> {
   const originalStdoutWrite = process.stdout.write.bind(process.stdout)
@@ -69,101 +73,145 @@ function toAuthOptions(config: AuthConfig): { workspace: string, token: string }
     : { workspace: config.workspace, email: config.email, password: config.password }
 }
 
+function isAuthErrorMessage(message: string): boolean {
+  const normalized = message.toLowerCase()
+  return normalized.includes('auth') || normalized.includes('password') || normalized.includes('401') || normalized.includes('403')
+}
+
+function isRetryableConnectionError(error: unknown): boolean {
+  if (error instanceof CliError) {
+    return error.code === 'CONNECTION_ERROR'
+  }
+
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  const message = error.message.toLowerCase()
+  const retryableMarkers = [
+    'fetch failed',
+    'network',
+    'timeout',
+    'timed out',
+    'econnreset',
+    'econnrefused',
+    'enotfound',
+    'eai_again',
+    'socket hang up',
+    'service unavailable',
+    'temporarily unavailable',
+    '502',
+    '503',
+    '504'
+  ]
+
+  return retryableMarkers.some((marker) => message.includes(marker))
+}
+
+async function connectClientOnce(resolvedConfig: AuthConfig): Promise<{ client: HulyClient, config: AuthConfig }> {
+  const serverConfig = await loadServerConfig(resolvedConfig.url)
+  const workspaceToken = await getWorkspaceToken(resolvedConfig.url, toAuthOptions(resolvedConfig), serverConfig)
+  const markupOps = createMarkupOperations(
+    resolvedConfig.url,
+    workspaceToken.workspaceId,
+    workspaceToken.token,
+    serverConfig
+  )
+  const restClient = createRestClient(
+    workspaceToken.endpoint,
+    workspaceToken.workspaceId,
+    workspaceToken.token
+  )
+  let txOpsPromise: Promise<TxOperations> | undefined
+
+  const getTxOps = async (): Promise<TxOperations> => {
+    txOpsPromise ??= withSuppressedBootstrapNoise(async () => await createRestTxOperations(
+      workspaceToken.endpoint,
+      workspaceToken.workspaceId,
+      workspaceToken.token
+    ))
+
+    return await txOpsPromise
+  }
+
+  const processMarkup = async <T extends Record<string, unknown>>(
+    objectClass: Ref<Class<Doc>>,
+    objectId: Ref<Doc>,
+    data: T
+  ): Promise<T> => {
+    const result: Record<string, unknown> = {}
+
+    for (const [key, value] of Object.entries(data)) {
+      if (value instanceof MarkupContent) {
+        result[key] = await markupOps.uploadMarkup(objectClass, objectId, key, value.content, value.kind)
+      } else {
+        result[key] = value
+      }
+    }
+
+    return result as T
+  }
+
+  const client: HulyClient = {
+    getHierarchy: () => {
+      throw new Error('getHierarchy is only available through transactional operations')
+    },
+    getModel: () => {
+      throw new Error('getModel is only available through transactional operations')
+    },
+    getAccount: async () => await restClient.getAccount(),
+    findAll: async (...args) => await restClient.findAll(...args),
+    findOne: async (...args) => await restClient.findOne(...args),
+    createDoc: async (_class, space, attributes, id) => {
+      const docId = id ?? generateId()
+      const processedAttributes = await processMarkup(_class as Ref<Class<Doc>>, docId as Ref<Doc>, attributes as Record<string, unknown>)
+      return await (await getTxOps()).createDoc(_class, space, processedAttributes as Data<any>, docId)
+    },
+    updateDoc: async (_class, space, objectId, operations, retrieve) => {
+      const processedOperations = await processMarkup(
+        _class as Ref<Class<Doc>>,
+        objectId as Ref<Doc>,
+        operations as Record<string, unknown>
+      )
+      return await (await getTxOps()).updateDoc(_class, space, objectId, processedOperations as DocumentUpdate<any>, retrieve)
+    },
+    removeDoc: async (...args) => await (await getTxOps()).removeDoc(...args),
+    addCollection: async (_class, space, attachedTo, attachedToClass, collection, attributes, id) => {
+      const docId = id ?? generateId()
+      const processedAttributes = await processMarkup(_class as Ref<Class<Doc>>, docId as Ref<Doc>, attributes as Record<string, unknown>)
+      return await (await getTxOps()).addCollection(
+        _class,
+        space,
+        attachedTo,
+        attachedToClass,
+        collection,
+        processedAttributes as AttachedData<any>,
+        docId
+      )
+    },
+    fetchMarkup: async (...args) => await markupOps.fetchMarkup(...args),
+    uploadMarkup: async (...args) => await markupOps.uploadMarkup(...args),
+    close: async () => {}
+  }
+
+  return { client, config: resolvedConfig }
+}
+
 export async function connectClient(config?: AuthConfig): Promise<{ client: HulyClient, config: AuthConfig }> {
   const resolvedConfig = config ?? (await resolveAuthConfig())
 
   try {
-    const serverConfig = await loadServerConfig(resolvedConfig.url)
-    const workspaceToken = await getWorkspaceToken(resolvedConfig.url, toAuthOptions(resolvedConfig), serverConfig)
-    const markupOps = createMarkupOperations(
-      resolvedConfig.url,
-      workspaceToken.workspaceId,
-      workspaceToken.token,
-      serverConfig
-    )
-    const restClient = createRestClient(
-      workspaceToken.endpoint,
-      workspaceToken.workspaceId,
-      workspaceToken.token
-    )
-    let txOpsPromise: Promise<TxOperations> | undefined
-
-    const getTxOps = async (): Promise<TxOperations> => {
-      txOpsPromise ??= withSuppressedBootstrapNoise(async () => await createRestTxOperations(
-        workspaceToken.endpoint,
-        workspaceToken.workspaceId,
-        workspaceToken.token
-      ))
-
-      return await txOpsPromise
-    }
-
-    const processMarkup = async <T extends Record<string, unknown>>(
-      objectClass: Ref<Class<Doc>>,
-      objectId: Ref<Doc>,
-      data: T
-    ): Promise<T> => {
-      const result: Record<string, unknown> = {}
-
-      for (const [key, value] of Object.entries(data)) {
-        if (value instanceof MarkupContent) {
-          result[key] = await markupOps.uploadMarkup(objectClass, objectId, key, value.content, value.kind)
-        } else {
-          result[key] = value
-        }
+    return await retry(
+      async () => await connectClientOnce(resolvedConfig),
+      {
+        retries: CONNECT_RETRIES,
+        delayMs: CONNECT_RETRY_DELAY_MS,
+        shouldRetry: isRetryableConnectionError
       }
-
-      return result as T
-    }
-
-    const client: HulyClient = {
-      getHierarchy: () => {
-        throw new Error('getHierarchy is only available through transactional operations')
-      },
-      getModel: () => {
-        throw new Error('getModel is only available through transactional operations')
-      },
-      getAccount: async () => await restClient.getAccount(),
-      findAll: async (...args) => await restClient.findAll(...args),
-      findOne: async (...args) => await restClient.findOne(...args),
-      createDoc: async (_class, space, attributes, id) => {
-        const docId = id ?? generateId()
-        const processedAttributes = await processMarkup(_class as Ref<Class<Doc>>, docId as Ref<Doc>, attributes as Record<string, unknown>)
-        return await (await getTxOps()).createDoc(_class, space, processedAttributes as Data<any>, docId)
-      },
-      updateDoc: async (_class, space, objectId, operations, retrieve) => {
-        const processedOperations = await processMarkup(
-          _class as Ref<Class<Doc>>,
-          objectId as Ref<Doc>,
-          operations as Record<string, unknown>
-        )
-        return await (await getTxOps()).updateDoc(_class, space, objectId, processedOperations as DocumentUpdate<any>, retrieve)
-      },
-      removeDoc: async (...args) => await (await getTxOps()).removeDoc(...args),
-      addCollection: async (_class, space, attachedTo, attachedToClass, collection, attributes, id) => {
-        const docId = id ?? generateId()
-        const processedAttributes = await processMarkup(_class as Ref<Class<Doc>>, docId as Ref<Doc>, attributes as Record<string, unknown>)
-        return await (await getTxOps()).addCollection(
-          _class,
-          space,
-          attachedTo,
-          attachedToClass,
-          collection,
-          processedAttributes as AttachedData<any>,
-          docId
-        )
-      },
-      fetchMarkup: async (...args) => await markupOps.fetchMarkup(...args),
-      uploadMarkup: async (...args) => await markupOps.uploadMarkup(...args),
-      close: async () => {}
-    }
-
-    return { client, config: resolvedConfig }
+    )
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown connection error'
-    const code = message.toLowerCase().includes('auth') || message.toLowerCase().includes('password')
-      ? 'AUTH_INVALID'
-      : 'CONNECTION_ERROR'
+    const code = isAuthErrorMessage(message) ? 'AUTH_INVALID' : 'CONNECTION_ERROR'
 
     throw new CliError(code, `Failed to connect to Huly: ${message}`, code === 'AUTH_INVALID' ? 2 : 5, error)
   }

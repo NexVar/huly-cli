@@ -21,7 +21,9 @@ type IssueCreateOptions = {
   descriptionFile?: string
   priority?: string
   assignee?: string
+  labels?: string
   dueDate?: string
+  parent?: string
 }
 
 type IssueUpdateOptions = {
@@ -32,6 +34,7 @@ type IssueUpdateOptions = {
   priority?: string
   assignee?: string
   dueDate?: string
+  milestone?: string
 }
 
 function parseLimit(limit: string | undefined): number | undefined {
@@ -45,6 +48,23 @@ function parseLimit(limit: string | undefined): number | undefined {
   }
 
   return parsed
+}
+
+function parseLabels(labels: string | undefined): string[] | undefined {
+  if (labels === undefined) {
+    return undefined
+  }
+
+  const parsed = labels
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+
+  if (parsed.length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'Invalid --labels value: expected at least one label title.', 4)
+  }
+
+  return Array.from(new Set(parsed))
 }
 
 export function registerIssueCommands(program: Command): void {
@@ -88,10 +108,13 @@ export function registerIssueCommands(program: Command): void {
     .option('--description-file <path>', 'Read issue description from a file')
     .option('--priority <priority>', 'Issue priority')
     .option('--assignee <email>', 'Assignee email')
+    .option('--labels <titles>', 'Comma-separated label titles')
     .option('--due-date <date>', 'Due date in ISO-8601 format')
+    .option('--parent <identifier>', 'Parent issue identifier')
 
   handleCommand(create, async (options: IssueCreateOptions) => {
     const description = await readTextOption(options.description, options.descriptionFile, 'description')
+    const labels = parseLabels(options.labels)
 
     return await withClient(async (client) => await createIssue(client, {
       projectIdentifier: options.project,
@@ -99,7 +122,9 @@ export function registerIssueCommands(program: Command): void {
       description,
       priority: options.priority,
       assignee: options.assignee,
-      dueDate: options.dueDate
+      labels,
+      dueDate: options.dueDate,
+      parent: options.parent
     }))
   })
 
@@ -114,6 +139,7 @@ export function registerIssueCommands(program: Command): void {
     .option('--priority <priority>', 'Issue priority')
     .option('--assignee <email>', 'Assignee email')
     .option('--due-date <date>', 'Due date in ISO-8601 format')
+    .option('--milestone <name>', 'Milestone label')
 
   handleCommand(update, async (identifier: string, options: IssueUpdateOptions) => {
     const description = await readTextOption(options.description, options.descriptionFile, 'description')
@@ -124,7 +150,8 @@ export function registerIssueCommands(program: Command): void {
       status: options.status,
       priority: options.priority,
       assignee: options.assignee,
-      dueDate: options.dueDate
+      dueDate: options.dueDate,
+      milestone: options.milestone
     }))
   })
 
