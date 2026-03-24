@@ -703,6 +703,10 @@ export async function createTeamspace(
     throw new CliError('VALIDATION_ERROR', `Teamspace '${options.name}' already exists`, 4)
   }
 
+  const account = await client.getAccount()
+  const members = options.private ? [account.uuid] : []
+  const owners = [account.uuid]
+
   const teamspaceId = await client.createDoc(
     document.class.Teamspace,
     core.space.Space,
@@ -711,8 +715,8 @@ export async function createTeamspace(
       description: options.description ?? '',
       private: options.private ?? false,
       archived: false,
-      members: [],
-      owners: [],
+      members,
+      owners,
       autoJoin: !(options.private ?? false),
       restricted: options.private ?? false,
       type: document.spaceType.DefaultTeamspaceType
