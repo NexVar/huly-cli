@@ -1,12 +1,13 @@
 import { markdown } from '@hcengineering/api-client'
-import contact, { getPersonBySocialKey } from '@hcengineering/contact'
-import core, { SortingOrder, generateId, type Ref, type Status } from '@hcengineering/core'
+import contact, { AvatarType, getPersonBySocialKey, type Person as HulyPerson } from '@hcengineering/contact'
+import core, { SocialIdType, SortingOrder, buildSocialIdString, generateId, type Ref, type Status } from '@hcengineering/core'
+import document, { getFirstRank, type Document as HulyDocument, type Teamspace } from '@hcengineering/document'
 import { makeRank } from '@hcengineering/rank'
 import task from '@hcengineering/task'
-import tracker, { IssuePriority, type Issue, type Project } from '@hcengineering/tracker'
+import tracker, { IssuePriority, MilestoneStatus, type Issue, type Milestone, type Project } from '@hcengineering/tracker'
 import type { HulyClient } from './client'
 import { CliError } from './output'
-import type { IssueSummary, MemberSummary, ProjectSummary } from './types'
+import type { ChannelSummary, DocumentSummary, IssueSummary, MemberSummary, MilestoneSummary, PersonSummary, ProjectSummary, TeamspaceSummary } from './types'
 
 const ISSUE_PRIORITY_LABELS: Record<number, string> = {
   [IssuePriority.NoPriority]: 'NoPriority',
@@ -14,6 +15,13 @@ const ISSUE_PRIORITY_LABELS: Record<number, string> = {
   [IssuePriority.High]: 'High',
   [IssuePriority.Medium]: 'Medium',
   [IssuePriority.Low]: 'Low'
+}
+
+const MILESTONE_STATUS_LABELS: Record<number, string> = {
+  [MilestoneStatus.Planned]: 'Planned',
+  [MilestoneStatus.InProgress]: 'InProgress',
+  [MilestoneStatus.Completed]: 'Completed',
+  [MilestoneStatus.Canceled]: 'Canceled'
 }
 
 function normalizeString(value: string): string {
@@ -28,15 +36,108 @@ function socialKeyForEmail(email: string): string {
   return `email:${normalizeString(email)}`
 }
 
+function normalizeOptionalString(value: string | null | undefined): string | null {
+  if (value === undefined || value === null) {
+    return null
+  }
+
+  const normalized = value.trim()
+  return normalized.length > 0 ? normalized : null
+}
+
 function extractEmail(socialKeys: string[]): string | null {
   const emailKey = socialKeys.find((value) => value.startsWith('email:'))
   return emailKey ? emailKey.slice('email:'.length) : null
 }
 
+const CHANNEL_TYPE_BY_PROVIDER = new Map<string, string>([
+  [contact.channelProvider.Email, 'email'],
+  [contact.channelProvider.Phone, 'phone'],
+  [contact.channelProvider.LinkedIn, 'linkedin'],
+  [contact.channelProvider.Twitter, 'twitter'],
+  [contact.channelProvider.Telegram, 'telegram'],
+  [contact.channelProvider.GitHub, 'github'],
+  [contact.channelProvider.Facebook, 'facebook'],
+  [contact.channelProvider.Homepage, 'homepage'],
+  [contact.channelProvider.Whatsapp, 'whatsapp'],
+  [contact.channelProvider.Skype, 'skype'],
+  [contact.channelProvider.Profile, 'profile'],
+  [contact.channelProvider.Viber, 'viber']
+])
+
 async function findEmailForPerson(client: HulyClient, personId: string): Promise<string | null> {
   const identities = await client.findAll(contact.class.SocialIdentity, { attachedTo: personId as never })
   const email = identities.find((identity) => identity.type === 'email')
   return email?.value ?? null
+}
+
+function getChannelType(providerId: string, providerName: string | null): string {
+  const knownType = CHANNEL_TYPE_BY_PROVIDER.get(providerId)
+  if (knownType) {
+    return knownType
+  }
+
+  return providerName ? normalizeString(providerName).replace(/\s+/g, '-') : providerId
+}
+
+async function getChannelMapForPersons(
+  client: HulyClient,
+  personIds: string[]
+): Promise<Map<string, ChannelSummary[]>> {
+  const result = new Map<string, ChannelSummary[]>(personIds.map((personId) => [personId, []]))
+
+  if (personIds.length === 0) {
+    return result
+  }
+
+  const channels = await client.findAll(contact.class.Channel, {
+    attachedTo: { $in: personIds as never[] }
+  }, {
+    limit: Math.max(personIds.length * 10, 100),
+    sort: { value: SortingOrder.Ascending }
+  })
+
+  const providerIds = Array.from(new Set(channels.map((channel) => channel.provider)))
+  const providers = providerIds.length > 0
+    ? await client.findAll(contact.class.ChannelProvider, { _id: { $in: providerIds as never[] } })
+    : []
+  const providerNameById = new Map<string, string | null>(
+    providers.map((provider) => [provider._id, 'name' in provider ? normalizeOptionalString(provider.name as string | undefined) : null])
+  )
+
+  for (const channel of channels) {
+    result.get(channel.attachedTo)?.push({
+      type: getChannelType(channel.provider, providerNameById.get(channel.provider) ?? null),
+      value: channel.value
+    })
+  }
+
+  return result
+}
+
+export async function getPersonById(client: HulyClient, id: string) {
+  const person = await client.findOne(contact.class.Person, { _id: id as never })
+
+  if (!person) {
+    throw new CliError('NOT_FOUND', `Person '${id}' not found`, 3)
+  }
+
+  return person
+}
+
+async function mapPersonSummary(
+  client: HulyClient,
+  person: { _id: string, name: string, city?: string | null },
+  channelMap?: Map<string, ChannelSummary[]>
+): Promise<PersonSummary> {
+  const resolvedChannelMap = channelMap ?? await getChannelMapForPersons(client, [person._id])
+
+  return {
+    id: person._id,
+    name: person.name,
+    city: normalizeOptionalString(person.city),
+    channels: resolvedChannelMap.get(person._id) ?? []
+  }
 }
 
 export function parsePriority(value: string): IssuePriority {
@@ -48,6 +149,17 @@ export function parsePriority(value: string): IssuePriority {
   }
 
   return Number(entry[0]) as IssuePriority
+}
+
+export function parseMilestoneStatus(value: string): MilestoneStatus {
+  const normalized = normalizeString(value)
+  const entry = Object.entries(MILESTONE_STATUS_LABELS).find(([, label]) => normalizeString(label) === normalized)
+
+  if (!entry) {
+    throw new CliError('VALIDATION_ERROR', `Unsupported milestone status: ${value}`, 4)
+  }
+
+  return Number(entry[0]) as MilestoneStatus
 }
 
 export async function getProjectByIdentifier(client: HulyClient, identifier: string): Promise<Project> {
@@ -100,6 +212,180 @@ export async function getProjectSummary(client: HulyClient, identifier: string):
     description: 'description' in project ? (project.description as string | undefined) ?? null : null,
     defaultIssueStatus
   }
+}
+
+export async function getMilestoneById(client: HulyClient, id: string): Promise<Milestone> {
+  const milestone = await client.findOne(tracker.class.Milestone, { _id: id as Ref<Milestone> })
+
+  if (!milestone) {
+    throw new CliError('NOT_FOUND', `Milestone '${id}' not found`, 3)
+  }
+
+  return milestone
+}
+
+async function mapMilestoneSummary(
+  client: HulyClient,
+  milestone: Milestone,
+  projectIdentifier?: string
+): Promise<MilestoneSummary> {
+  const resolvedProjectIdentifier = projectIdentifier ?? (await client.findOne(tracker.class.Project, { _id: milestone.space }))?.identifier ?? null
+
+  return {
+    id: milestone._id,
+    label: milestone.label,
+    status: MILESTONE_STATUS_LABELS[milestone.status] ?? String(milestone.status),
+    project: resolvedProjectIdentifier,
+    targetDate: timestampToIso(milestone.targetDate)
+  }
+}
+
+export async function listMilestones(client: HulyClient, projectIdentifier: string): Promise<MilestoneSummary[]> {
+  const project = await getProjectByIdentifier(client, projectIdentifier)
+  const milestones = await client.findAll(tracker.class.Milestone, { space: project._id }, {
+    sort: { targetDate: SortingOrder.Ascending }
+  })
+
+  return await Promise.all(milestones.map(async (milestone) => await mapMilestoneSummary(client, milestone, project.identifier)))
+}
+
+export async function getMilestoneSummary(client: HulyClient, id: string): Promise<MilestoneSummary> {
+  const milestone = await getMilestoneById(client, id)
+  return await mapMilestoneSummary(client, milestone)
+}
+
+export async function createMilestone(
+  client: HulyClient,
+  options: {
+    projectIdentifier: string
+    label: string
+    status?: string
+    targetDate?: string
+  }
+): Promise<MilestoneSummary> {
+  const project = await getProjectByIdentifier(client, options.projectIdentifier)
+  const milestoneId = await client.createDoc(
+    tracker.class.Milestone,
+    project._id,
+    {
+      label: options.label,
+      status: options.status ? parseMilestoneStatus(options.status) : MilestoneStatus.Planned,
+      space: project._id,
+      comments: 0,
+      targetDate: options.targetDate ? new Date(options.targetDate).getTime() : Date.now()
+    } as never
+  )
+
+  return await getMilestoneSummary(client, milestoneId)
+}
+
+export async function updateMilestone(
+  client: HulyClient,
+  id: string,
+  updates: {
+    label?: string
+    status?: string
+    targetDate?: string
+  }
+): Promise<MilestoneSummary> {
+  const milestone = await getMilestoneById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.label !== undefined) {
+    operations.label = updates.label
+  }
+
+  if (updates.status !== undefined) {
+    operations.status = parseMilestoneStatus(updates.status)
+  }
+
+  if (updates.targetDate !== undefined) {
+    operations.targetDate = new Date(updates.targetDate).getTime()
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No milestone fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(tracker.class.Milestone, milestone.space, milestone._id, operations as never)
+  return await getMilestoneSummary(client, id)
+}
+
+export async function listPersons(client: HulyClient, limit?: number): Promise<PersonSummary[]> {
+  const persons = await client.findAll(contact.class.Person, {}, {
+    limit: limit ?? 100,
+    sort: { name: SortingOrder.Ascending }
+  })
+  const channelMap = await getChannelMapForPersons(client, persons.map((person) => person._id))
+
+  return await Promise.all(persons.map(async (person) => await mapPersonSummary(client, person, channelMap)))
+}
+
+export async function getPersonSummary(client: HulyClient, id: string): Promise<PersonSummary> {
+  const person = await getPersonById(client, id)
+  return await mapPersonSummary(client, person)
+}
+
+export async function createPerson(
+  client: HulyClient,
+  options: {
+    name: string
+    city?: string
+    email?: string
+  }
+): Promise<PersonSummary> {
+  const normalizedEmail = options.email ? normalizeString(options.email) : undefined
+
+  if (normalizedEmail) {
+    const existing = await getPersonBySocialKey(client as never, socialKeyForEmail(normalizedEmail))
+    if (existing) {
+      throw new CliError('VALIDATION_ERROR', `Email '${normalizedEmail}' is already attached to another person`, 4)
+    }
+  }
+
+  const personId = generateId<HulyPerson>()
+
+  await client.createDoc(
+    contact.class.Person,
+    contact.space.Contacts,
+    {
+      name: options.name,
+      city: options.city ?? '',
+      avatarType: AvatarType.COLOR
+    } as never,
+    personId
+  )
+
+  if (normalizedEmail) {
+    await client.addCollection(
+      contact.class.Channel,
+      contact.space.Contacts,
+      personId,
+      contact.class.Person,
+      'channels',
+      {
+        provider: contact.channelProvider.Email,
+        value: normalizedEmail
+      } as never
+    )
+
+    await client.addCollection(
+      contact.class.SocialIdentity,
+      contact.space.Contacts,
+      personId,
+      contact.class.Person,
+      'socialIds',
+      {
+        type: SocialIdType.EMAIL,
+        value: normalizedEmail,
+        key: buildSocialIdString({ type: SocialIdType.EMAIL, value: normalizedEmail }),
+        verifiedOn: Date.now(),
+        isDeleted: false
+      } as never
+    )
+  }
+
+  return await getPersonSummary(client, personId)
 }
 
 async function findPersonByEmail(client: HulyClient, email: string) {
@@ -169,6 +455,202 @@ async function mapIssue(client: HulyClient, issue: Issue, includeDescription: bo
     dueDate: timestampToIso(hydrated.dueDate),
     number: hydrated.number ?? null
   }
+}
+
+export async function getTeamspaceByName(client: HulyClient, name: string): Promise<Teamspace> {
+  const teamspace = await client.findOne(document.class.Teamspace, { name })
+
+  if (!teamspace) {
+    throw new CliError('NOT_FOUND', `Teamspace '${name}' not found`, 3)
+  }
+
+  return teamspace
+}
+
+async function mapTeamspace(client: HulyClient, teamspace: Teamspace): Promise<TeamspaceSummary> {
+  const spaceType = teamspace.type
+    ? await client.findOne(core.class.SpaceType, { _id: teamspace.type })
+    : undefined
+
+  return {
+    id: teamspace._id,
+    name: teamspace.name,
+    description: teamspace.description ?? null,
+    private: teamspace.private,
+    archived: teamspace.archived,
+    type: spaceType?.name ?? null
+  }
+}
+
+async function mapDocument(
+  client: HulyClient,
+  doc: HulyDocument,
+  includeContent: boolean
+): Promise<DocumentSummary> {
+  const hydrated = await client.findOne(document.class.Document, { _id: doc._id }, {
+    lookup: {
+      space: document.class.Teamspace
+    }
+  })
+
+  if (!hydrated) {
+    throw new CliError('NOT_FOUND', `Document '${doc._id}' not found`, 3)
+  }
+
+  const content = includeContent && hydrated.content
+    ? await client.fetchMarkup(hydrated._class, hydrated._id, 'content', hydrated.content, 'markdown')
+    : null
+
+  return {
+    id: hydrated._id,
+    title: hydrated.title,
+    content,
+    teamspace: hydrated.$lookup?.space?.name ?? null,
+    parentId: hydrated.parent === document.ids.NoParent ? null : hydrated.parent,
+    rank: hydrated.rank ?? null
+  }
+}
+
+export async function listTeamspaces(client: HulyClient): Promise<TeamspaceSummary[]> {
+  const teamspaces = await client.findAll(document.class.Teamspace, {}, {
+    sort: { name: SortingOrder.Ascending }
+  })
+
+  return await Promise.all(teamspaces.map(async (teamspace) => await mapTeamspace(client, teamspace)))
+}
+
+export async function createTeamspace(
+  client: HulyClient,
+  options: {
+    name: string
+    description?: string
+    private?: boolean
+  }
+): Promise<TeamspaceSummary> {
+  const existing = await client.findOne(document.class.Teamspace, { name: options.name })
+  if (existing) {
+    throw new CliError('VALIDATION_ERROR', `Teamspace '${options.name}' already exists`, 4)
+  }
+
+  const teamspaceId = await client.createDoc(
+    document.class.Teamspace,
+    core.space.Space,
+    {
+      name: options.name,
+      description: options.description ?? '',
+      private: options.private ?? false,
+      archived: false,
+      members: [],
+      owners: [],
+      autoJoin: !(options.private ?? false),
+      restricted: options.private ?? false,
+      type: document.spaceType.DefaultTeamspaceType
+    } as never
+  )
+
+  const teamspace = await client.findOne(document.class.Teamspace, { _id: teamspaceId })
+  if (!teamspace) {
+    throw new CliError('GENERAL_ERROR', `Failed to load created teamspace '${options.name}'`, 1)
+  }
+
+  return await mapTeamspace(client, teamspace)
+}
+
+export async function getDocumentById(client: HulyClient, id: string): Promise<HulyDocument> {
+  const doc = await client.findOne(document.class.Document, { _id: id as Ref<HulyDocument> })
+
+  if (!doc) {
+    throw new CliError('NOT_FOUND', `Document '${id}' not found`, 3)
+  }
+
+  return doc
+}
+
+export async function listDocuments(
+  client: HulyClient,
+  options: {
+    teamspaceName: string
+    limit?: number
+    sort?: string
+  }
+): Promise<DocumentSummary[]> {
+  const teamspace = await getTeamspaceByName(client, options.teamspaceName)
+  const sortField = options.sort && options.sort.startsWith('-') ? options.sort.slice(1) : options.sort ?? 'modifiedOn'
+  const sortDirection = options.sort?.startsWith('-') ? SortingOrder.Descending : SortingOrder.Ascending
+
+  const docs = await client.findAll(document.class.Document, { space: teamspace._id }, {
+    limit: options.limit ?? 20,
+    sort: {
+      [sortField]: sortDirection
+    }
+  })
+
+  return await Promise.all(docs.map(async (doc) => await mapDocument(client, doc, true)))
+}
+
+export async function getDocumentSummary(client: HulyClient, id: string): Promise<DocumentSummary> {
+  const doc = await getDocumentById(client, id)
+  return await mapDocument(client, doc, true)
+}
+
+export async function createDocument(
+  client: HulyClient,
+  options: {
+    teamspaceName: string
+    title: string
+    content?: string
+  }
+): Promise<DocumentSummary> {
+  const teamspace = await getTeamspaceByName(client, options.teamspaceName)
+  const lastRank = await getFirstRank(client as never, teamspace._id, document.ids.NoParent, SortingOrder.Descending)
+  const docId = generateId<HulyDocument>()
+
+  await client.createDoc(
+    document.class.Document,
+    teamspace._id,
+    {
+      title: options.title,
+      content: options.content ? markdown(options.content) : null,
+      parent: document.ids.NoParent,
+      rank: makeRank(lastRank, undefined)
+    } as never,
+    docId
+  )
+
+  return await getDocumentSummary(client, docId)
+}
+
+export async function updateDocument(
+  client: HulyClient,
+  id: string,
+  updates: {
+    title?: string
+    content?: string
+  }
+): Promise<DocumentSummary> {
+  const doc = await getDocumentById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.title !== undefined) {
+    operations.title = updates.title
+  }
+
+  if (updates.content !== undefined) {
+    operations.content = markdown(updates.content)
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No document fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(document.class.Document, doc.space, doc._id, operations as never)
+  return await getDocumentSummary(client, id)
+}
+
+export async function deleteDocument(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const doc = await getDocumentById(client, id)
+  await client.removeDoc(document.class.Document, doc.space, doc._id)
+  return { deleted: true, id }
 }
 
 export async function getIssueByIdentifier(client: HulyClient, identifier: string): Promise<Issue> {

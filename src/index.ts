@@ -1,8 +1,12 @@
 import { Command, CommanderError } from 'commander'
 import { registerAuthCommands } from './commands/auth'
+import { registerDocumentCommands } from './commands/document'
 import { registerIssueCommands } from './commands/issue'
 import { registerMemberCommands } from './commands/member'
+import { registerMilestoneCommands } from './commands/milestone'
+import { registerPersonCommands } from './commands/person'
 import { registerProjectCommands } from './commands/project'
+import { registerTeamspaceCommands } from './commands/teamspace'
 import { CliError, errorPayload, writeErrorPayload } from './lib/output'
 
 export function buildProgram(): Command {
@@ -23,6 +27,10 @@ export function buildProgram(): Command {
   registerProjectCommands(program)
   registerIssueCommands(program)
   registerMemberCommands(program)
+  registerMilestoneCommands(program)
+  registerPersonCommands(program)
+  registerTeamspaceCommands(program)
+  registerDocumentCommands(program)
 
   return program
 }
@@ -54,6 +62,10 @@ export async function main(argv: string[]): Promise<void> {
   try {
     await program.parseAsync(argv)
   } catch (error) {
+    if (error instanceof CommanderError && error.exitCode === 0) {
+      return
+    }
+
     const cliError = toCliError(error)
     writeErrorPayload(errorPayload(cliError))
     process.exitCode = cliError.exitCode

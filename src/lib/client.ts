@@ -2,9 +2,10 @@ import {
   createRestClient,
   createRestTxOperations,
   getWorkspaceToken,
-  loadServerConfig
+  loadServerConfig,
+  MarkupContent
 } from '@hcengineering/api-client'
-import type { Account, Class, Doc, FindOptions, FindResult, ModelDb, Ref, WithLookup, TxResult, Space, Data, DocumentUpdate, AttachedDoc, AttachedData, Hierarchy, TxOperations } from '@hcengineering/core'
+import { generateId, type Account, type Class, type Doc, type FindOptions, type FindResult, type ModelDb, type Ref, type WithLookup, type TxResult, type Space, type Data, type DocumentUpdate, type AttachedDoc, type AttachedData, type Hierarchy, type TxOperations } from '@hcengineering/core'
 import { resolveAuthConfig } from './config'
 import { createMarkupOperations } from './markup'
 import { CliError } from './output'
@@ -97,6 +98,24 @@ export async function connectClient(config?: AuthConfig): Promise<{ client: Huly
       return await txOpsPromise
     }
 
+    const processMarkup = async <T extends Record<string, unknown>>(
+      objectClass: Ref<Class<Doc>>,
+      objectId: Ref<Doc>,
+      data: T
+    ): Promise<T> => {
+      const result: Record<string, unknown> = {}
+
+      for (const [key, value] of Object.entries(data)) {
+        if (value instanceof MarkupContent) {
+          result[key] = await markupOps.uploadMarkup(objectClass, objectId, key, value.content, value.kind)
+        } else {
+          result[key] = value
+        }
+      }
+
+      return result as T
+    }
+
     const client: HulyClient = {
       getHierarchy: () => {
         throw new Error('getHierarchy is only available through transactional operations')
@@ -107,10 +126,33 @@ export async function connectClient(config?: AuthConfig): Promise<{ client: Huly
       getAccount: async () => await restClient.getAccount(),
       findAll: async (...args) => await restClient.findAll(...args),
       findOne: async (...args) => await restClient.findOne(...args),
-      createDoc: async (...args) => await (await getTxOps()).createDoc(...args),
-      updateDoc: async (...args) => await (await getTxOps()).updateDoc(...args),
+      createDoc: async (_class, space, attributes, id) => {
+        const docId = id ?? generateId()
+        const processedAttributes = await processMarkup(_class as Ref<Class<Doc>>, docId as Ref<Doc>, attributes as Record<string, unknown>)
+        return await (await getTxOps()).createDoc(_class, space, processedAttributes as Data<any>, docId)
+      },
+      updateDoc: async (_class, space, objectId, operations, retrieve) => {
+        const processedOperations = await processMarkup(
+          _class as Ref<Class<Doc>>,
+          objectId as Ref<Doc>,
+          operations as Record<string, unknown>
+        )
+        return await (await getTxOps()).updateDoc(_class, space, objectId, processedOperations as DocumentUpdate<any>, retrieve)
+      },
       removeDoc: async (...args) => await (await getTxOps()).removeDoc(...args),
-      addCollection: async (...args) => await (await getTxOps()).addCollection(...args),
+      addCollection: async (_class, space, attachedTo, attachedToClass, collection, attributes, id) => {
+        const docId = id ?? generateId()
+        const processedAttributes = await processMarkup(_class as Ref<Class<Doc>>, docId as Ref<Doc>, attributes as Record<string, unknown>)
+        return await (await getTxOps()).addCollection(
+          _class,
+          space,
+          attachedTo,
+          attachedToClass,
+          collection,
+          processedAttributes as AttachedData<any>,
+          docId
+        )
+      },
       fetchMarkup: async (...args) => await markupOps.fetchMarkup(...args),
       uploadMarkup: async (...args) => await markupOps.uploadMarkup(...args),
       close: async () => {}

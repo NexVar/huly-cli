@@ -75,3 +75,41 @@ export type MemberSummary = {
   active: boolean | null
   personUuid: string | null
 }
+
+export type TeamspaceSummary = {
+  id: string
+  name: string
+  description: string | null
+  private: boolean
+  archived: boolean
+  type: string | null
+}
+
+export type DocumentSummary = {
+  id: string
+  title: string
+  content: string | null
+  teamspace: string | null
+  parentId: string | null
+  rank: string | null
+}
+
+export type ChannelSummary = {
+  type: string
+  value: string
+}
+
+export type PersonSummary = {
+  id: string
+  name: string
+  city: string | null
+  channels: ChannelSummary[]
+}
+
+export type MilestoneSummary = {
+  id: string
+  label: string
+  status: string
+  project: string | null
+  targetDate: string | null
+}
