@@ -29,13 +29,13 @@ Additional implemented commands:
 - `label list|create|assign`
 - `component list|create`
 - `comment list|add`
+- `notification list|get|read|unread|archive|unarchive`
 - `setup-skill`
 
 Current scope details:
 
-- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `setup-skill`
-- Not implemented yet: extended Phase 5 modules
-- Coverage notes: [docs/PRD_STATUS.md](docs/PRD_STATUS.md)
+- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `notification`, `setup-skill`
+- Not implemented yet: remaining Phase 5 modules such as `hr`, `board`, `time`, `drive`, `chat`, `card`, `recruit`
 
 ## Install
 
@@ -130,6 +130,7 @@ npm run dev -- milestone list --project WEBSI
 npm run dev -- label list
 npm run dev -- component list --project WEBSI
 npm run dev -- comment list --on WEBSI-123
+npm run dev -- notification list --unread --active
 ```
 
 Using the built binary:
@@ -144,6 +145,7 @@ node dist/bin/huly.js milestone list --project WEBSI
 node dist/bin/huly.js label list
 node dist/bin/huly.js component list --project WEBSI
 node dist/bin/huly.js comment list --on WEBSI-123
+node dist/bin/huly.js notification list --limit 10
 node dist/bin/huly.js setup-skill
 ```
 
@@ -221,6 +223,15 @@ npm run dev -- comment list --on WEBSI-123
 npm run dev -- comment add --on WEBSI-123 --message "Implemented in commit abc123"
 ```
 
+Work with inbox notifications:
+
+```bash
+npm run dev -- notification list --unread --active
+npm run dev -- notification get 69b6f98faf221468336cced8
+npm run dev -- notification read 69b6f98faf221468336cced8
+npm run dev -- notification archive 69b6f98faf221468336cced8
+```
+
 Install the bundled agent skill:
 
 ```bash
@@ -279,6 +290,7 @@ Exit codes:
 - Issue labels are implemented through Huly’s published `@hcengineering/tags` package and attached to issues as tag references.
 - Components are implemented as tracker-scoped docs in the project space.
 - Comments are implemented as `@hcengineering/chunter` chat messages attached to the parent object's `comments` collection.
+- Notifications are implemented as `@hcengineering/notification` inbox docs scoped to the current authenticated account.
 - The packaged AI skill is bundled at `.claude/commands/huly.md` and can be installed into another project with `huly setup-skill`.
 - Document content is stored through the explicit markup upload path, which now works for both `doc` content and issue descriptions.
 - `removeDoc` is wired for issue deletion and passed live smoke tests, but broader verification across different Huly deployments is still pending.

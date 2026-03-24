@@ -137,3 +137,22 @@ export type CommentSummary = {
   author: string
   createdOn: string | null
 }
+
+export type NotificationSummary = {
+  id: string
+  class: string
+  title: string | null
+  body: string | null
+  isViewed: boolean
+  archived: boolean
+  objectId: string
+  objectClass: string
+  attachedTo: string | null
+  attachedToClass: string | null
+  contextId: string
+  types: string[]
+  createdOn: string | null
+  modifiedOn: string | null
+  intlParams: Record<string, string | number> | null
+  intlParamsNotLocalized: Record<string, string> | null
+}

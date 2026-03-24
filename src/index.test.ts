@@ -45,6 +45,7 @@ test('main returns JSON for --help', async () => {
 
   assert.equal(payload.ok, true)
   assert.equal(payload.data.command, 'huly')
+  assert.ok(payload.data.commands.some((command) => command.name === 'notification'))
   assert.ok(payload.data.commands.some((command) => command.name === 'setup-skill'))
 })
 
@@ -66,6 +67,28 @@ test('main returns JSON for nested command help', async () => {
   assert.equal(payload.ok, true)
   assert.equal(payload.data.command, 'issue')
   assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+})
+
+test('main returns JSON for notification help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'notification', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'notification')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'read'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'archive'))
 })
 
 test('main returns JSON for --version', async () => {

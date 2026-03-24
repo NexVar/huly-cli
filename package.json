@@ -39,6 +39,7 @@
     "@hcengineering/contact": "^0.7.0",
     "@hcengineering/core": "^0.7.26",
     "@hcengineering/document": "^0.7.0",
+    "@hcengineering/notification": "^0.7.0",
     "@hcengineering/rank": "^0.7.0",
     "@hcengineering/task": "^0.7.0",
     "@hcengineering/tags": "^0.7.0",

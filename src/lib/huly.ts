@@ -3,13 +3,14 @@ import chunter, { type ChatMessage } from '@hcengineering/chunter'
 import contact, { AvatarType, getPersonBySocialKey, type Person as HulyPerson } from '@hcengineering/contact'
 import core, { SocialIdType, SortingOrder, buildSocialIdString, generateId, type Class, type Doc, type Ref, type Space, type Status } from '@hcengineering/core'
 import document, { getFirstRank, type Document as HulyDocument, type Teamspace } from '@hcengineering/document'
+import notification, { type InboxNotification } from '@hcengineering/notification'
 import { makeRank } from '@hcengineering/rank'
 import task from '@hcengineering/task'
 import tags, { type TagElement, type TagReference } from '@hcengineering/tags'
 import tracker, { IssuePriority, MilestoneStatus, type Component, type Issue, type Milestone, type Project } from '@hcengineering/tracker'
 import type { HulyClient } from './client'
 import { CliError } from './output'
-import type { ChannelSummary, CommentSummary, ComponentSummary, DocumentSummary, IssueSummary, LabelSummary, MemberSummary, MilestoneSummary, PersonSummary, ProjectSummary, TeamspaceSummary } from './types'
+import type { ChannelSummary, CommentSummary, ComponentSummary, DocumentSummary, IssueSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, TeamspaceSummary } from './types'
 
 const ISSUE_PRIORITY_LABELS: Record<number, string> = {
   [IssuePriority.NoPriority]: 'NoPriority',
@@ -45,6 +46,14 @@ function normalizeOptionalString(value: string | null | undefined): string | nul
 
   const normalized = value.trim()
   return normalized.length > 0 ? normalized : null
+}
+
+function normalizeUnknownString(value: unknown): string | null {
+  return typeof value === 'string' ? normalizeOptionalString(value) : null
+}
+
+function normalizeUnknownRef(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
 }
 
 function extractEmail(socialKeys: string[]): string | null {
@@ -1214,6 +1223,95 @@ export async function addComment(
 
   const authorNames = await getAuthorNameMap(client, [comment.modifiedBy])
   return await mapCommentSummary(client, comment, authorNames)
+}
+
+async function getNotificationById(client: HulyClient, id: string): Promise<InboxNotification> {
+  const account = await client.getAccount()
+  const notificationDoc = await client.findOne(notification.class.InboxNotification, {
+    _id: id as Ref<InboxNotification>,
+    user: account.uuid as never
+  })
+
+  if (!notificationDoc) {
+    throw new CliError('NOT_FOUND', `Notification '${id}' not found`, 3)
+  }
+
+  return notificationDoc
+}
+
+function mapNotificationSummary(notificationDoc: InboxNotification): NotificationSummary {
+  const attachedTo = 'attachedTo' in notificationDoc ? normalizeUnknownRef(notificationDoc.attachedTo) : null
+  const attachedToClass = 'attachedToClass' in notificationDoc ? normalizeUnknownRef(notificationDoc.attachedToClass) : null
+
+  return {
+    id: notificationDoc._id,
+    class: notificationDoc._class,
+    title: normalizeUnknownString(notificationDoc.title),
+    body: normalizeUnknownString(notificationDoc.body),
+    isViewed: notificationDoc.isViewed,
+    archived: notificationDoc.archived,
+    objectId: notificationDoc.objectId,
+    objectClass: notificationDoc.objectClass,
+    attachedTo,
+    attachedToClass,
+    contextId: notificationDoc.docNotifyContext,
+    types: notificationDoc.types ?? [],
+    createdOn: timestampToIso(notificationDoc.createdOn),
+    modifiedOn: timestampToIso(notificationDoc.modifiedOn),
+    intlParams: notificationDoc.intlParams ?? null,
+    intlParamsNotLocalized: notificationDoc.intlParamsNotLocalized ?? null
+  }
+}
+
+export async function listNotifications(
+  client: HulyClient,
+  options: {
+    limit?: number
+    isViewed?: boolean
+    archived?: boolean
+  }
+): Promise<NotificationSummary[]> {
+  const account = await client.getAccount()
+  const notifications = await client.findAll(notification.class.InboxNotification, {
+    user: account.uuid as never,
+    ...(options.isViewed === undefined ? {} : { isViewed: options.isViewed as never }),
+    ...(options.archived === undefined ? {} : { archived: options.archived as never })
+  }, {
+    limit: options.limit ?? 20,
+    sort: { modifiedOn: SortingOrder.Descending }
+  })
+
+  return notifications.map((notificationDoc) => mapNotificationSummary(notificationDoc))
+}
+
+export async function getNotificationSummary(client: HulyClient, id: string): Promise<NotificationSummary> {
+  return mapNotificationSummary(await getNotificationById(client, id))
+}
+
+async function updateNotification(
+  client: HulyClient,
+  id: string,
+  operations: Partial<Pick<InboxNotification, 'isViewed' | 'archived'>>
+): Promise<NotificationSummary> {
+  const notificationDoc = await getNotificationById(client, id)
+  await client.updateDoc(notification.class.InboxNotification, notificationDoc.space, notificationDoc._id, operations as never)
+  return await getNotificationSummary(client, id)
+}
+
+export async function readNotification(client: HulyClient, id: string): Promise<NotificationSummary> {
+  return await updateNotification(client, id, { isViewed: true })
+}
+
+export async function unreadNotification(client: HulyClient, id: string): Promise<NotificationSummary> {
+  return await updateNotification(client, id, { isViewed: false })
+}
+
+export async function archiveNotification(client: HulyClient, id: string): Promise<NotificationSummary> {
+  return await updateNotification(client, id, { archived: true })
+}
+
+export async function unarchiveNotification(client: HulyClient, id: string): Promise<NotificationSummary> {
+  return await updateNotification(client, id, { archived: false })
 }
 
 export async function listMembers(client: HulyClient, limit?: number): Promise<MemberSummary[]> {
