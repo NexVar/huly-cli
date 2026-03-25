@@ -12,6 +12,7 @@ import { registerPersonCommands } from './commands/person'
 import { registerProjectCommands } from './commands/project'
 import { registerSetupSkillCommand } from './commands/setup-skill'
 import { registerTeamspaceCommands } from './commands/teamspace'
+import { registerTimeCommands } from './commands/time'
 import { CliError, errorPayload, successPayload, writeErrorPayload, writeSuccessPayload } from './lib/output'
 
 const packageJson = require('../package.json') as { version?: string }
@@ -71,6 +72,7 @@ export function buildProgram(): Command {
   registerDocumentCommands(program)
   registerComponentCommands(program)
   registerCommentCommands(program)
+  registerTimeCommands(program)
   registerSetupSkillCommand(program)
 
   return program

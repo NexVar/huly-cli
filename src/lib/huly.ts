@@ -7,10 +7,13 @@ import notification, { type InboxNotification } from '@hcengineering/notificatio
 import { makeRank } from '@hcengineering/rank'
 import task from '@hcengineering/task'
 import tags, { type TagElement, type TagReference } from '@hcengineering/tags'
+import { jsonToMarkup, markupToJSON } from '@hcengineering/text'
+import { markdownToMarkup, markupToMarkdown } from '@hcengineering/text-markdown'
+import time, { ToDoPriority, type ToDo } from '@hcengineering/time'
 import tracker, { IssuePriority, MilestoneStatus, type Component, type Issue, type Milestone, type Project } from '@hcengineering/tracker'
 import type { HulyClient } from './client'
 import { CliError } from './output'
-import type { ChannelSummary, CommentSummary, ComponentSummary, DocumentSummary, IssueSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, TeamspaceSummary } from './types'
+import type { ChannelSummary, CommentSummary, ComponentSummary, DocumentSummary, IssueSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, TeamspaceSummary, TimeTodoSummary } from './types'
 
 const ISSUE_PRIORITY_LABELS: Record<number, string> = {
   [IssuePriority.NoPriority]: 'NoPriority',
@@ -25,6 +28,14 @@ const MILESTONE_STATUS_LABELS: Record<number, string> = {
   [MilestoneStatus.InProgress]: 'InProgress',
   [MilestoneStatus.Completed]: 'Completed',
   [MilestoneStatus.Canceled]: 'Canceled'
+}
+
+const TODO_PRIORITY_LABELS: Record<number, string> = {
+  [ToDoPriority.High]: 'High',
+  [ToDoPriority.Medium]: 'Medium',
+  [ToDoPriority.Low]: 'Low',
+  [ToDoPriority.NoPriority]: 'NoPriority',
+  [ToDoPriority.Urgent]: 'Urgent'
 }
 
 function normalizeString(value: string): string {
@@ -54,6 +65,14 @@ function normalizeUnknownString(value: unknown): string | null {
 
 function normalizeUnknownRef(value: unknown): string | null {
   return typeof value === 'string' ? value : null
+}
+
+function markdownToInlineMarkup(value: string): string {
+  return jsonToMarkup(markdownToMarkup(value))
+}
+
+function inlineMarkupToMarkdown(value: string): string {
+  return markupToMarkdown(markupToJSON(value))
 }
 
 function extractEmail(socialKeys: string[]): string | null {
@@ -414,6 +433,54 @@ async function resolveAssigneeRef(client: HulyClient, email: string | undefined)
   }
 
   return person._id
+}
+
+async function resolveEmployeeRef(client: HulyClient, email: string | undefined): Promise<Ref<any> | null | undefined> {
+  if (email === undefined) {
+    return undefined
+  }
+
+  const person = await findPersonByEmail(client, email)
+  if (!person) {
+    throw new CliError('NOT_FOUND', `Assignee '${email}' not found`, 3)
+  }
+
+  const employee = await client.findOne(contact.mixin.Employee, { _id: person._id as never })
+  if (!employee) {
+    throw new CliError('NOT_FOUND', `Assignee '${email}' is not a workspace member`, 3)
+  }
+
+  return employee._id
+}
+
+async function getCurrentEmployeeRef(client: HulyClient): Promise<Ref<any>> {
+  const account = await client.getAccount()
+  const employee = await client.findOne(contact.mixin.Employee, { personUuid: account.uuid as never })
+
+  if (!employee) {
+    throw new CliError('NOT_FOUND', 'Current member not found in the workspace', 3)
+  }
+
+  return employee._id
+}
+
+function parseTodoPriority(value: string): ToDoPriority {
+  switch (normalizeString(value)) {
+    case 'high':
+      return ToDoPriority.High
+    case 'medium':
+      return ToDoPriority.Medium
+    case 'low':
+      return ToDoPriority.Low
+    case 'none':
+    case 'nopriority':
+    case 'no-priority':
+      return ToDoPriority.NoPriority
+    case 'urgent':
+      return ToDoPriority.Urgent
+    default:
+      throw new CliError('VALIDATION_ERROR', `Unsupported todo priority: ${value}`, 4)
+  }
 }
 
 async function loadStatusForProject(client: HulyClient, projectId: Ref<Project>, name: string): Promise<Ref<Status>> {
@@ -1312,6 +1379,247 @@ export async function archiveNotification(client: HulyClient, id: string): Promi
 
 export async function unarchiveNotification(client: HulyClient, id: string): Promise<NotificationSummary> {
   return await updateNotification(client, id, { archived: false })
+}
+
+async function getEmailMapForPersons(client: HulyClient, personIds: string[]): Promise<Map<string, string | null>> {
+  const result = new Map<string, string | null>(personIds.map((personId) => [personId, null]))
+
+  if (personIds.length === 0) {
+    return result
+  }
+
+  const identities = await client.findAll(contact.class.SocialIdentity, {
+    attachedTo: { $in: personIds as never[] },
+    type: 'email' as never
+  }, {
+    limit: Math.max(personIds.length * 4, 100),
+    sort: { value: SortingOrder.Ascending }
+  })
+
+  for (const identity of identities) {
+    if (!result.has(identity.attachedTo)) {
+      continue
+    }
+
+    if (result.get(identity.attachedTo) === null) {
+      result.set(identity.attachedTo, identity.value)
+    }
+  }
+
+  return result
+}
+
+async function getTimeTodoById(client: HulyClient, id: string): Promise<ToDo> {
+  const todo = await client.findOne(time.class.ToDo, { _id: id as Ref<ToDo> })
+
+  if (!todo) {
+    throw new CliError('NOT_FOUND', `Todo '${id}' not found`, 3)
+  }
+
+  return todo
+}
+
+async function mapTimeTodos(
+  client: HulyClient,
+  todos: ToDo[],
+  options: { includeDescription: boolean }
+): Promise<TimeTodoSummary[]> {
+  const issueIds = Array.from(new Set(
+    todos
+      .filter((todo) => todo.attachedToClass === tracker.class.Issue)
+      .map((todo) => todo.attachedTo as string)
+  ))
+  const assigneeIds = Array.from(new Set(todos.map((todo) => todo.user as string)))
+
+  const [issues, assignees] = await Promise.all([
+    issueIds.length > 0
+      ? client.findAll(tracker.class.Issue, { _id: { $in: issueIds as never[] } }, { limit: issueIds.length })
+      : Promise.resolve([]),
+    assigneeIds.length > 0
+      ? client.findAll(contact.mixin.Employee, { _id: { $in: assigneeIds as never[] } }, { limit: assigneeIds.length })
+      : Promise.resolve([])
+  ])
+
+  const issueIdentifierById = new Map(issues.map((issue) => [issue._id as string, issue.identifier]))
+  const assigneeById = new Map(assignees.map((employee) => [employee._id as string, employee]))
+  const emailByAssigneeId = await getEmailMapForPersons(client, assignees.map((employee) => employee._id as string))
+
+  return await Promise.all(todos.map(async (todo) => {
+    const description = options.includeDescription && todo.description
+      ? inlineMarkupToMarkdown(todo.description)
+      : null
+    const assignee = assigneeById.get(todo.user as string)
+
+    return {
+      id: todo._id,
+      class: todo._class,
+      title: todo.title,
+      description,
+      priority: TODO_PRIORITY_LABELS[todo.priority] ?? todo.priority,
+      isDone: todo.doneOn !== null,
+      doneOn: timestampToIso(todo.doneOn),
+      dueDate: timestampToIso(todo.dueDate),
+      issue: issueIdentifierById.get(todo.attachedTo as string) ?? null,
+      issueId: todo.attachedToClass === tracker.class.Issue ? todo.attachedTo : null,
+      assignee: assignee?.name ?? null,
+      assigneeEmail: assignee ? emailByAssigneeId.get(assignee._id) ?? null : null,
+      assigneeId: typeof todo.user === 'string' ? todo.user : null,
+      createdOn: timestampToIso(todo.createdOn),
+      modifiedOn: timestampToIso(todo.modifiedOn)
+    }
+  }))
+}
+
+export async function listTimeTodos(
+  client: HulyClient,
+  options: {
+    issueIdentifier?: string
+    assignee?: string
+    isDone?: boolean
+    limit?: number
+  }
+): Promise<TimeTodoSummary[]> {
+  const query: Record<string, unknown> = {
+    attachedToClass: tracker.class.Issue,
+    collection: 'todos'
+  }
+
+  if (options.issueIdentifier !== undefined) {
+    const issue = await getIssueByIdentifier(client, options.issueIdentifier)
+    query.attachedTo = issue._id
+  }
+
+  if (options.assignee !== undefined) {
+    query.user = await resolveEmployeeRef(client, options.assignee)
+  }
+
+  if (options.isDone === true) {
+    query.doneOn = { $gt: 0 }
+  } else if (options.isDone === false) {
+    query.doneOn = null
+  }
+
+  const todos = await client.findAll(time.class.ToDo, query as never, {
+    limit: options.limit ?? 20,
+    sort: { modifiedOn: SortingOrder.Descending }
+  })
+
+  return await mapTimeTodos(client, todos, { includeDescription: false })
+}
+
+export async function getTimeTodoSummary(client: HulyClient, id: string): Promise<TimeTodoSummary> {
+  const [todo] = await mapTimeTodos(client, [await getTimeTodoById(client, id)], { includeDescription: true })
+  return todo
+}
+
+export async function createTimeTodo(
+  client: HulyClient,
+  options: {
+    issueIdentifier: string
+    title: string
+    description?: string
+    priority?: string
+    assignee?: string
+    dueDate?: string
+  }
+): Promise<TimeTodoSummary> {
+  const issue = await getIssueByIdentifier(client, options.issueIdentifier)
+  const assignee = (await resolveEmployeeRef(client, options.assignee)) ?? await getCurrentEmployeeRef(client)
+  const lastTodo = await client.findOne(time.class.ToDo, {
+    attachedTo: issue._id as never,
+    attachedToClass: issue._class as never,
+    collection: 'todos' as never
+  }, {
+    sort: { rank: SortingOrder.Descending }
+  })
+
+  const todoId = await client.addCollection(
+    time.class.ProjectToDo,
+    time.space.ToDos,
+    issue._id,
+    issue._class,
+    'todos',
+    {
+      title: options.title,
+      description: options.description ? markdownToInlineMarkup(options.description) : '',
+      priority: options.priority ? parseTodoPriority(options.priority) : ToDoPriority.NoPriority,
+      dueDate: options.dueDate ? new Date(options.dueDate).getTime() : null,
+      doneOn: null,
+      visibility: 'public',
+      user: assignee,
+      workslots: 0,
+      attachedSpace: issue.space,
+      rank: makeRank(lastTodo?.rank, undefined)
+    } as never
+  )
+
+  return await getTimeTodoSummary(client, todoId)
+}
+
+export async function updateTimeTodo(
+  client: HulyClient,
+  id: string,
+  updates: {
+    title?: string
+    description?: string
+    priority?: string
+    assignee?: string
+    dueDate?: string
+  }
+): Promise<TimeTodoSummary> {
+  const todo = await getTimeTodoById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.title !== undefined) {
+    operations.title = updates.title
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description ? markdownToInlineMarkup(updates.description) : ''
+  }
+
+  if (updates.priority !== undefined) {
+    operations.priority = parseTodoPriority(updates.priority)
+  }
+
+  if (updates.assignee !== undefined) {
+    operations.user = await resolveEmployeeRef(client, updates.assignee)
+  }
+
+  if (updates.dueDate !== undefined) {
+    operations.dueDate = updates.dueDate ? new Date(updates.dueDate).getTime() : null
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No todo fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(todo._class as Ref<Class<ToDo>>, todo.space, todo._id, operations as never)
+  return await getTimeTodoSummary(client, id)
+}
+
+async function updateTimeTodoState(
+  client: HulyClient,
+  id: string,
+  operations: Partial<Pick<ToDo, 'doneOn'>>
+): Promise<TimeTodoSummary> {
+  const todo = await getTimeTodoById(client, id)
+  await client.updateDoc(todo._class as Ref<Class<ToDo>>, todo.space, todo._id, operations as never)
+  return await getTimeTodoSummary(client, id)
+}
+
+export async function completeTimeTodo(client: HulyClient, id: string): Promise<TimeTodoSummary> {
+  return await updateTimeTodoState(client, id, { doneOn: Date.now() })
+}
+
+export async function reopenTimeTodo(client: HulyClient, id: string): Promise<TimeTodoSummary> {
+  return await updateTimeTodoState(client, id, { doneOn: null })
+}
+
+export async function deleteTimeTodo(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const todo = await getTimeTodoById(client, id)
+  await client.removeDoc(todo._class as Ref<Class<ToDo>>, todo.space, todo._id)
+  return { deleted: true, id }
 }
 
 export async function listMembers(client: HulyClient, limit?: number): Promise<MemberSummary[]> {

@@ -46,6 +46,7 @@ test('main returns JSON for --help', async () => {
   assert.equal(payload.ok, true)
   assert.equal(payload.data.command, 'huly')
   assert.ok(payload.data.commands.some((command) => command.name === 'notification'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'time'))
   assert.ok(payload.data.commands.some((command) => command.name === 'setup-skill'))
 })
 
@@ -89,6 +90,28 @@ test('main returns JSON for notification help', async () => {
   assert.ok(payload.data.commands.some((command) => command.name === 'list'))
   assert.ok(payload.data.commands.some((command) => command.name === 'read'))
   assert.ok(payload.data.commands.some((command) => command.name === 'archive'))
+})
+
+test('main returns JSON for time help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'time', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'time')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'done'))
 })
 
 test('main returns JSON for --version', async () => {

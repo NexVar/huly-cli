@@ -30,12 +30,18 @@ Additional implemented commands:
 - `component list|create`
 - `comment list|add`
 - `notification list|get|read|unread|archive|unarchive`
+- `time list|get|create|update|done|open|delete`
 - `setup-skill`
 
 Current scope details:
 
-- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `notification`, `setup-skill`
-- Not implemented yet: remaining Phase 5 modules such as `hr`, `board`, `time`, `drive`, `chat`, `card`, `recruit`
+- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `notification`, `time`, `setup-skill`
+- Not implemented yet: remaining Phase 5 modules such as `hr`, `board`, `drive`, `chat`, `card`, `recruit`
+
+Current `time` scope:
+
+- `time` currently manages issue-attached todos through Huly's published time package.
+- Full time-report and logged-time coverage from the long-term PRD is still pending.
 
 ## Install
 
@@ -131,6 +137,7 @@ npm run dev -- label list
 npm run dev -- component list --project WEBSI
 npm run dev -- comment list --on WEBSI-123
 npm run dev -- notification list --unread --active
+npm run dev -- time list --issue HULY-1
 ```
 
 Using the built binary:
@@ -146,6 +153,7 @@ node dist/bin/huly.js label list
 node dist/bin/huly.js component list --project WEBSI
 node dist/bin/huly.js comment list --on WEBSI-123
 node dist/bin/huly.js notification list --limit 10
+node dist/bin/huly.js time list --limit 10
 node dist/bin/huly.js setup-skill
 ```
 
@@ -171,6 +179,17 @@ Update an issue milestone:
 
 ```bash
 npm run dev -- issue update WEBSI-123 --milestone "Sprint 1"
+```
+
+Create and complete an issue todo:
+
+```bash
+npm run dev -- time create \
+  --issue HULY-1 \
+  --title "Follow up from CLI" \
+  --description "Created by huly-cli"
+
+npm run dev -- time done <todo-id>
 ```
 
 Create a document:

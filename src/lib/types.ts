@@ -156,3 +156,21 @@ export type NotificationSummary = {
   intlParams: Record<string, string | number> | null
   intlParamsNotLocalized: Record<string, string> | null
 }
+
+export type TimeTodoSummary = {
+  id: string
+  class: string
+  title: string
+  description: string | null
+  priority: string | number
+  isDone: boolean
+  doneOn: string | null
+  dueDate: string | null
+  issue: string | null
+  issueId: string | null
+  assignee: string | null
+  assigneeEmail: string | null
+  assigneeId: string | null
+  createdOn: string | null
+  modifiedOn: string | null
+}
