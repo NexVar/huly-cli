@@ -1,4 +1,5 @@
 import { markdown } from '@hcengineering/api-client'
+import card, { type Card as HulyCard, type CardSpace, type MasterTag } from '@hcengineering/card'
 import chunter, { type ChatMessage } from '@hcengineering/chunter'
 import contact, { AvatarType, getPersonBySocialKey, type Person as HulyPerson } from '@hcengineering/contact'
 import core, { SocialIdType, SortingOrder, buildSocialIdString, generateId, type Class, type Doc, type Ref, type Space, type Status } from '@hcengineering/core'
@@ -13,7 +14,7 @@ import time, { ToDoPriority, type ToDo } from '@hcengineering/time'
 import tracker, { IssuePriority, MilestoneStatus, type Component, type Issue, type Milestone, type Project } from '@hcengineering/tracker'
 import type { HulyClient } from './client'
 import { CliError } from './output'
-import type { ChannelSummary, CommentSummary, ComponentSummary, DocumentSummary, IssueSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, TeamspaceSummary, TimeTodoSummary } from './types'
+import type { CardSummary, CardTypeSummary, ChannelSummary, CommentSummary, ComponentSummary, DocumentSummary, IssueSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, TeamspaceSummary, TimeTodoSummary } from './types'
 
 const ISSUE_PRIORITY_LABELS: Record<number, string> = {
   [IssuePriority.NoPriority]: 'NoPriority',
@@ -38,12 +39,26 @@ const TODO_PRIORITY_LABELS: Record<number, string> = {
   [ToDoPriority.Urgent]: 'Urgent'
 }
 
+const CARD_TYPE_LABELS = new Map<string, string>([
+  [card.class.Card, 'Card'],
+  [card.types.Document, 'Document'],
+  [card.types.File, 'File'],
+  [contact.class.UserProfile, 'UserProfile'],
+  ['chat:masterTag:Thread', 'Thread'],
+  ['communication:type:Direct', 'Direct'],
+  ['communication:type:Poll', 'Poll']
+])
+
 function normalizeString(value: string): string {
   return value.trim().toLowerCase()
 }
 
 function timestampToIso(value: number | null | undefined): string | null {
   return typeof value === 'number' ? new Date(value).toISOString() : null
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function socialKeyForEmail(email: string): string {
@@ -1619,6 +1634,282 @@ export async function reopenTimeTodo(client: HulyClient, id: string): Promise<Ti
 export async function deleteTimeTodo(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
   const todo = await getTimeTodoById(client, id)
   await client.removeDoc(todo._class as Ref<Class<ToDo>>, todo.space, todo._id)
+  return { deleted: true, id }
+}
+
+function getFallbackCardTypeLabel(typeId: string): string {
+  const segments = typeId.split(':')
+  return segments[segments.length - 1] || typeId
+}
+
+function getCardTypeLabel(typeId: string, typeDoc?: Partial<MasterTag>): string {
+  return CARD_TYPE_LABELS.get(typeId)
+    ?? normalizeUnknownString((typeDoc as { title?: unknown } | undefined)?.title)
+    ?? normalizeUnknownString((typeDoc as { name?: unknown } | undefined)?.name)
+    ?? getFallbackCardTypeLabel(typeId)
+}
+
+async function getDefaultCardSpace(client: HulyClient): Promise<CardSpace> {
+  const space = await client.findOne(card.class.CardSpace, { _id: card.space.Default as Ref<CardSpace> })
+
+  if (!space) {
+    throw new CliError('NOT_FOUND', `Card space '${card.space.Default}' not found`, 3)
+  }
+
+  return space
+}
+
+async function getCardById(client: HulyClient, id: string): Promise<HulyCard> {
+  const cardDoc = await client.findOne(card.class.Card, { _id: id as Ref<HulyCard> })
+
+  if (!cardDoc) {
+    throw new CliError('NOT_FOUND', `Card '${id}' not found`, 3)
+  }
+
+  return cardDoc
+}
+
+async function getCardTypesById(
+  client: HulyClient,
+  typeIds: string[]
+): Promise<Map<string, MasterTag | undefined>> {
+  const uniqueTypeIds = Array.from(new Set(typeIds))
+  const typeById = new Map<string, MasterTag | undefined>(uniqueTypeIds.map((typeId) => [typeId, undefined]))
+  const masterTagIds = uniqueTypeIds.filter((typeId) => typeId !== card.class.Card)
+
+  if (masterTagIds.length === 0) {
+    return typeById
+  }
+
+  const typeDocs = await client.findAll(card.class.MasterTag, {
+    _id: { $in: masterTagIds as never[] }
+  }, {
+    limit: masterTagIds.length
+  })
+
+  for (const typeDoc of typeDocs) {
+    typeById.set(typeDoc._id, typeDoc)
+  }
+
+  return typeById
+}
+
+async function resolveCardType(client: HulyClient, value: string | undefined): Promise<string> {
+  if (value === undefined) {
+    return card.class.Card
+  }
+
+  const normalized = normalizeString(value)
+  if (normalized.length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'Card type cannot be empty.', 4)
+  }
+
+  const alias = new Map<string, string>([
+    ['card', card.class.Card],
+    ['document', card.types.Document],
+    ['doc', card.types.Document],
+    ['file', card.types.File]
+  ]).get(normalized)
+
+  if (alias) {
+    return alias
+  }
+
+  const defaultSpace = await getDefaultCardSpace(client)
+  const availableTypeIds = Array.from(new Set([card.class.Card as string, ...(defaultSpace.types ?? []).map((typeId) => typeId as string)]))
+
+  if (availableTypeIds.includes(value)) {
+    return value
+  }
+
+  const typeById = await getCardTypesById(client, availableTypeIds)
+  const matches = availableTypeIds.filter((typeId) => normalizeString(getCardTypeLabel(typeId, typeById.get(typeId))) === normalized)
+
+  if (matches.length === 1) {
+    return matches[0]
+  }
+
+  if (matches.length > 1) {
+    throw new CliError('VALIDATION_ERROR', `Card type '${value}' is ambiguous. Use the type id instead.`, 4)
+  }
+
+  throw new CliError('NOT_FOUND', `Card type '${value}' not found`, 3)
+}
+
+async function mapCards(
+  client: HulyClient,
+  cards: HulyCard[],
+  options: { includeContent: boolean }
+): Promise<CardSummary[]> {
+  const typeIds = Array.from(new Set(cards.map((cardDoc) => cardDoc._class as string)))
+  const parentIds = Array.from(new Set(
+    cards
+      .map((cardDoc) => cardDoc.parent)
+      .filter((parentId): parentId is Ref<HulyCard> => parentId !== null && parentId !== undefined)
+  ))
+  const spaceIds = Array.from(new Set(cards.map((cardDoc) => cardDoc.space as string)))
+
+  const [typeById, parents, spaces] = await Promise.all([
+    getCardTypesById(client, typeIds),
+    parentIds.length > 0
+      ? client.findAll(card.class.Card, { _id: { $in: parentIds as never[] } }, { limit: parentIds.length })
+      : Promise.resolve([]),
+    spaceIds.length > 0
+      ? client.findAll(card.class.CardSpace, { _id: { $in: spaceIds as never[] } }, { limit: spaceIds.length })
+      : Promise.resolve([])
+  ])
+
+  const parentById = new Map(parents.map((parent) => [parent._id as string, parent]))
+  const spaceNameById = new Map(spaces.map((space) => [space._id as string, (space as { name?: string }).name ?? space._id]))
+
+  return await Promise.all(cards.map(async (cardDoc) => ({
+    id: cardDoc._id,
+    title: cardDoc.title,
+    content: options.includeContent && cardDoc.content
+      ? await client.fetchMarkup(cardDoc._class as Ref<Class<Doc>>, cardDoc._id, 'content', cardDoc.content, 'markdown')
+      : null,
+    type: getCardTypeLabel(cardDoc._class as string, typeById.get(cardDoc._class as string)),
+    typeId: cardDoc._class,
+    space: spaceNameById.get(cardDoc.space as string) ?? cardDoc.space,
+    parentId: cardDoc.parent ?? null,
+    parentTitle: cardDoc.parent ? parentById.get(cardDoc.parent)?.title ?? null : null,
+    children: cardDoc.children ?? null,
+    attachments: cardDoc.attachments ?? null,
+    rank: cardDoc.rank ?? null,
+    createdOn: timestampToIso(cardDoc.createdOn),
+    modifiedOn: timestampToIso(cardDoc.modifiedOn)
+  })))
+}
+
+export async function listCardTypes(client: HulyClient): Promise<CardTypeSummary[]> {
+  const defaultSpace = await getDefaultCardSpace(client)
+  const typeIds = Array.from(new Set([card.class.Card as string, ...(defaultSpace.types ?? []).map((typeId) => typeId as string)]))
+  const typeById = await getCardTypesById(client, typeIds)
+
+  return typeIds.map((typeId) => ({
+    id: typeId,
+    label: getCardTypeLabel(typeId, typeById.get(typeId)),
+    builtin: typeId.startsWith('card:') || typeId.startsWith('contact:') || typeId.startsWith('communication:') || typeId.startsWith('chat:')
+  }))
+}
+
+export async function listCards(
+  client: HulyClient,
+  options: {
+    type?: string
+    parentId?: string
+    limit?: number
+  }
+): Promise<CardSummary[]> {
+  const query: Record<string, unknown> = {
+    space: card.space.Default
+  }
+
+  if (options.type !== undefined) {
+    query._class = await resolveCardType(client, options.type)
+  }
+
+  if (options.parentId !== undefined) {
+    query.parent = (await getCardById(client, options.parentId))._id
+  }
+
+  const cards = await client.findAll(card.class.Card, query as never, {
+    limit: options.limit ?? 20,
+    sort: { modifiedOn: SortingOrder.Descending }
+  })
+
+  return await mapCards(client, cards, { includeContent: false })
+}
+
+export async function getCardSummary(client: HulyClient, id: string): Promise<CardSummary> {
+  const [cardDoc] = await mapCards(client, [await getCardById(client, id)], { includeContent: true })
+  return cardDoc
+}
+
+export async function createCard(
+  client: HulyClient,
+  options: {
+    title: string
+    content?: string
+    type?: string
+    parentId?: string
+  }
+): Promise<CardSummary> {
+  const cardClass = await resolveCardType(client, options.type)
+  const parent = options.parentId ? await getCardById(client, options.parentId) : null
+  const siblingsQuery = {
+    space: card.space.Default,
+    parent: parent?._id ?? null
+  }
+  const lastCard = await client.findOne(card.class.Card, siblingsQuery as never, {
+    sort: { rank: SortingOrder.Descending }
+  })
+  const parentInfo = parent
+    ? [...(parent.parentInfo ?? []), { _id: parent._id, _class: parent._class, title: parent.title }]
+    : []
+
+  const id = await client.createDoc(
+    cardClass as Ref<Class<HulyCard>>,
+    card.space.Default,
+    {
+      title: options.title,
+      content: options.content ? markdown(options.content) : null,
+      blobs: {},
+      parentInfo,
+      parent: parent?._id ?? null,
+      rank: makeRank(lastCard?.rank, undefined)
+    } as never
+  )
+
+  const [summary] = await mapCards(client, [await getCardById(client, id)], { includeContent: false })
+
+  return {
+    ...summary,
+    content: options.content ?? null
+  }
+}
+
+export async function updateCard(
+  client: HulyClient,
+  id: string,
+  updates: {
+    title?: string
+    content?: string
+  }
+): Promise<CardSummary> {
+  const cardDoc = await getCardById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.title !== undefined) {
+    operations.title = updates.title
+  }
+
+  if (updates.content !== undefined) {
+    operations.content = markdown(updates.content)
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No card fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(cardDoc._class as Ref<Class<HulyCard>>, cardDoc.space, cardDoc._id, operations as never)
+
+  if (updates.content !== undefined) {
+    await sleep(6000)
+    const [summary] = await mapCards(client, [await getCardById(client, id)], { includeContent: false })
+    return {
+      ...summary,
+      title: updates.title ?? summary.title,
+      content: updates.content
+    }
+  }
+
+  return await getCardSummary(client, id)
+}
+
+export async function deleteCard(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const cardDoc = await getCardById(client, id)
+  await client.removeDoc(cardDoc._class as Ref<Class<HulyCard>>, cardDoc.space, cardDoc._id)
   return { deleted: true, id }
 }
 

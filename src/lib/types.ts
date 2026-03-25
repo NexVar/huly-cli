@@ -174,3 +174,25 @@ export type TimeTodoSummary = {
   createdOn: string | null
   modifiedOn: string | null
 }
+
+export type CardTypeSummary = {
+  id: string
+  label: string
+  builtin: boolean
+}
+
+export type CardSummary = {
+  id: string
+  title: string
+  content: string | null
+  type: string
+  typeId: string
+  space: string
+  parentId: string | null
+  parentTitle: string | null
+  children: number | null
+  attachments: number | null
+  rank: string | null
+  createdOn: string | null
+  modifiedOn: string | null
+}

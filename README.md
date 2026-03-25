@@ -2,7 +2,7 @@
 
 `huly-cli` is a JSON-first command line client for the Huly Platform API, aimed at scripts, CI jobs, and AI agents that need predictable shell commands instead of ad hoc TypeScript snippets.
 
-The project currently implements the PRD's Phase 1 command set. The long-term target remains broader API parity across Huly entities.
+The project currently implements the PRD's Phase 1 command set plus several later slices. The long-term target remains broader API parity across Huly entities.
 
 ## Priorities
 
@@ -29,19 +29,26 @@ Additional implemented commands:
 - `label list|create|assign`
 - `component list|create`
 - `comment list|add`
+- `card types|list|get|create|update|delete`
 - `notification list|get|read|unread|archive|unarchive`
 - `time list|get|create|update|done|open|delete`
 - `setup-skill`
 
 Current scope details:
 
-- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `notification`, `time`, `setup-skill`
-- Not implemented yet: remaining Phase 5 modules such as `hr`, `board`, `drive`, `chat`, `card`, `recruit`
+- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `card`, `notification`, `time`, `setup-skill`
+- Not implemented yet: remaining Phase 5 modules such as `hr`, `board`, `drive`, `chat`, `recruit`
 
 Current `time` scope:
 
 - `time` currently manages issue-attached todos through Huly's published time package.
 - Full time-report and logged-time coverage from the long-term PRD is still pending.
+
+Current `card` scope:
+
+- `card` currently manages cards in Huly's default card space with type listing plus basic CRUD.
+- The smoke-tested write path currently uses the generic `Card` type. Other workspace-specific card types are discoverable through `card types`, but some may have stricter backend behavior.
+- Deeper card-schema work from the long-term PRD, such as custom relations and attributes, is still pending.
 
 ## Install
 
@@ -136,6 +143,7 @@ npm run dev -- milestone list --project WEBSI
 npm run dev -- label list
 npm run dev -- component list --project WEBSI
 npm run dev -- comment list --on WEBSI-123
+npm run dev -- card list --type Card --limit 10
 npm run dev -- notification list --unread --active
 npm run dev -- time list --issue HULY-1
 ```
@@ -152,6 +160,7 @@ node dist/bin/huly.js milestone list --project WEBSI
 node dist/bin/huly.js label list
 node dist/bin/huly.js component list --project WEBSI
 node dist/bin/huly.js comment list --on WEBSI-123
+node dist/bin/huly.js card list --type Card --limit 10
 node dist/bin/huly.js notification list --limit 10
 node dist/bin/huly.js time list --limit 10
 node dist/bin/huly.js setup-skill
@@ -190,6 +199,15 @@ npm run dev -- time create \
   --description "Created by huly-cli"
 
 npm run dev -- time done <todo-id>
+```
+
+Create a card:
+
+```bash
+npm run dev -- card create \
+  --title "CLI card" \
+  --type Card \
+  --content "# Card body"
 ```
 
 Create a document:
