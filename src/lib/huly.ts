@@ -1,5 +1,5 @@
 import { markdown } from '@hcengineering/api-client'
-import card, { type Card as HulyCard, type CardSpace, type MasterTag } from '@hcengineering/card'
+import card, { type Card as HulyCard, type CardSpace, type MasterTag, type Role as CardRole } from '@hcengineering/card'
 import chunter, { type Channel as HulyChatChannel, type ChatMessage, type DirectMessage as HulyDirectMessage } from '@hcengineering/chunter'
 import contact, { AvatarType, getPersonBySocialKey, type Person as HulyPerson } from '@hcengineering/contact'
 import core, { SocialIdType, SortingOrder, buildSocialIdString, generateId, type Class, type Doc, type Ref, type Space, type Status } from '@hcengineering/core'
@@ -14,7 +14,7 @@ import time, { ToDoPriority, type ToDo } from '@hcengineering/time'
 import tracker, { IssuePriority, MilestoneStatus, type Component, type Issue, type Milestone, type Project } from '@hcengineering/tracker'
 import { connectClient, type HulyClient } from './client'
 import { CliError } from './output'
-import type { CardSummary, CardTypeSummary, ChannelSummary, ChatMessageSummary, ChatSpaceSummary, CommentSummary, ComponentSummary, DocumentSummary, IssueSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, TeamspaceSummary, TimeTodoSummary } from './types'
+import type { CardRoleSummary, CardSummary, CardTypeSummary, ChannelSummary, ChatMessageSummary, ChatSpaceSummary, CommentSummary, ComponentSummary, DocumentSummary, IssueSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, TeamspaceSummary, TimeTodoSummary } from './types'
 
 const ISSUE_PRIORITY_LABELS: Record<number, string> = {
   [IssuePriority.NoPriority]: 'NoPriority',
@@ -76,6 +76,34 @@ function normalizeOptionalString(value: string | null | undefined): string | nul
 
 function normalizeUnknownString(value: unknown): string | null {
   return typeof value === 'string' ? normalizeOptionalString(value) : null
+}
+
+function normalizeEmbeddedLabel(value: string | null): string | null {
+  if (value === null) {
+    return null
+  }
+
+  const embeddedPrefix = 'embedded:embedded:'
+
+  if (value.startsWith(embeddedPrefix)) {
+    return normalizeOptionalString(value.slice(embeddedPrefix.length))
+  }
+
+  return value
+}
+
+function toEmbeddedLabel(value: string): string {
+  return `embedded:embedded:${value}`
+}
+
+function requireNonEmptyString(value: string | undefined, label: string): string {
+  const normalized = normalizeOptionalString(value)
+
+  if (normalized === null) {
+    throw new CliError('VALIDATION_ERROR', `${label} cannot be empty.`, 4)
+  }
+
+  return normalized
 }
 
 function normalizeUnknownRef(value: unknown): string | null {
@@ -1642,10 +1670,19 @@ function getFallbackCardTypeLabel(typeId: string): string {
   return segments[segments.length - 1] || typeId
 }
 
+function isBuiltinCardTypeId(typeId: string): boolean {
+  return typeId.startsWith('card:') || typeId.startsWith('contact:') || typeId.startsWith('communication:') || typeId.startsWith('chat:')
+}
+
+function getCardTypeExtendsId(typeDoc?: Partial<MasterTag>): string | null {
+  return normalizeUnknownRef((typeDoc as { extends?: unknown } | undefined)?.extends)
+}
+
 function getCardTypeLabel(typeId: string, typeDoc?: Partial<MasterTag>): string {
   return CARD_TYPE_LABELS.get(typeId)
-    ?? normalizeUnknownString((typeDoc as { title?: unknown } | undefined)?.title)
-    ?? normalizeUnknownString((typeDoc as { name?: unknown } | undefined)?.name)
+    ?? normalizeEmbeddedLabel(normalizeUnknownString((typeDoc as { title?: unknown } | undefined)?.title))
+    ?? normalizeEmbeddedLabel(normalizeUnknownString((typeDoc as { name?: unknown } | undefined)?.name))
+    ?? normalizeEmbeddedLabel(normalizeUnknownString((typeDoc as { label?: unknown } | undefined)?.label))
     ?? getFallbackCardTypeLabel(typeId)
 }
 
@@ -1692,6 +1729,119 @@ async function getCardTypesById(
   }
 
   return typeById
+}
+
+async function listAvailableCardTypeIds(client: HulyClient): Promise<string[]> {
+  const defaultSpace = await getDefaultCardSpace(client)
+  return Array.from(new Set([card.class.Card as string, ...(defaultSpace.types ?? []).map((typeId) => typeId as string)]))
+}
+
+async function mapCardTypeSummaries(
+  client: HulyClient,
+  typeIds: string[],
+  options?: {
+    inDefaultSpaceIds?: string[]
+  }
+): Promise<CardTypeSummary[]> {
+  const uniqueTypeIds = Array.from(new Set(typeIds))
+  const inDefaultSpaceIds = new Set(options?.inDefaultSpaceIds ?? uniqueTypeIds)
+  const typeById = await getCardTypesById(client, uniqueTypeIds)
+  const extendsIds = Array.from(new Set(
+    uniqueTypeIds
+      .map((typeId) => getCardTypeExtendsId(typeById.get(typeId)))
+      .filter((typeId): typeId is string => typeId !== null)
+  ))
+  const extendsById = await getCardTypesById(client, extendsIds)
+
+  return uniqueTypeIds.map((typeId) => {
+    const typeDoc = typeById.get(typeId)
+    const extendsId = getCardTypeExtendsId(typeDoc)
+
+    return {
+      id: typeId,
+      label: getCardTypeLabel(typeId, typeDoc),
+      builtin: isBuiltinCardTypeId(typeId),
+      inDefaultSpace: inDefaultSpaceIds.has(typeId),
+      extendsId,
+      extendsLabel: extendsId ? getCardTypeLabel(extendsId, extendsById.get(extendsId)) : null,
+      color: typeof typeDoc?.color === 'number' ? typeDoc.color : null,
+      background: typeof typeDoc?.background === 'number' ? typeDoc.background : null,
+      removed: typeof typeDoc?.removed === 'boolean' ? typeDoc.removed : null,
+      createdOn: timestampToIso(typeDoc?.createdOn),
+      modifiedOn: timestampToIso(typeDoc?.modifiedOn)
+    }
+  })
+}
+
+async function getCardTypeDocById(client: HulyClient, id: string): Promise<MasterTag> {
+  const typeDoc = await client.findOne(card.class.MasterTag, { _id: id as Ref<MasterTag> })
+
+  if (!typeDoc) {
+    throw new CliError('NOT_FOUND', `Card type '${id}' not found`, 3)
+  }
+
+  return typeDoc
+}
+
+async function getMutableCardTypeDocById(client: HulyClient, id: string): Promise<MasterTag> {
+  if (isBuiltinCardTypeId(id)) {
+    throw new CliError('VALIDATION_ERROR', `Card type '${id}' is built in and cannot be modified.`, 4)
+  }
+
+  return await getCardTypeDocById(client, id)
+}
+
+async function ensureUniqueCardTypeLabel(client: HulyClient, label: string, currentTypeId?: string): Promise<void> {
+  const existingTypes = await listCardTypes(client)
+  const normalized = normalizeString(label)
+  const duplicate = existingTypes.find((type) => type.id !== currentTypeId && normalizeString(type.label) === normalized)
+
+  if (duplicate) {
+    throw new CliError('VALIDATION_ERROR', `Card type label '${label}' already exists`, 4)
+  }
+}
+
+async function getCardRoleById(client: HulyClient, id: string): Promise<CardRole> {
+  const role = await client.findOne(card.class.Role, { _id: id as Ref<CardRole> })
+
+  if (!role) {
+    throw new CliError('NOT_FOUND', `Card role '${id}' not found`, 3)
+  }
+
+  return role
+}
+
+async function mapCardRoleSummaries(client: HulyClient, roles: CardRole[]): Promise<CardRoleSummary[]> {
+  const typeIds = Array.from(new Set(roles.map((role) => role.attachedTo as string)))
+  const typeById = await getCardTypesById(client, typeIds)
+
+  return roles.map((role) => ({
+    id: role._id,
+    name: role.name,
+    typeId: role.attachedTo,
+    typeLabel: getCardTypeLabel(role.attachedTo, typeById.get(role.attachedTo as string)),
+    createdOn: timestampToIso(role.createdOn),
+    modifiedOn: timestampToIso(role.modifiedOn)
+  }))
+}
+
+async function ensureUniqueCardRoleName(
+  client: HulyClient,
+  typeId: string,
+  name: string,
+  currentRoleId?: string
+): Promise<void> {
+  const roles = await client.findAll(card.class.Role, {
+    attachedTo: typeId as never
+  }, {
+    limit: 200
+  })
+  const normalized = normalizeString(name)
+  const duplicate = roles.find((role) => role._id !== currentRoleId && normalizeString(role.name) === normalized)
+
+  if (duplicate) {
+    throw new CliError('VALIDATION_ERROR', `Card role '${name}' already exists on type '${typeId}'`, 4)
+  }
 }
 
 async function resolveCardType(client: HulyClient, value: string | undefined): Promise<string> {
@@ -1782,15 +1932,192 @@ async function mapCards(
 }
 
 export async function listCardTypes(client: HulyClient): Promise<CardTypeSummary[]> {
-  const defaultSpace = await getDefaultCardSpace(client)
-  const typeIds = Array.from(new Set([card.class.Card as string, ...(defaultSpace.types ?? []).map((typeId) => typeId as string)]))
-  const typeById = await getCardTypesById(client, typeIds)
+  const typeIds = await listAvailableCardTypeIds(client)
+  return await mapCardTypeSummaries(client, typeIds, { inDefaultSpaceIds: typeIds })
+}
 
-  return typeIds.map((typeId) => ({
-    id: typeId,
-    label: getCardTypeLabel(typeId, typeById.get(typeId)),
-    builtin: typeId.startsWith('card:') || typeId.startsWith('contact:') || typeId.startsWith('communication:') || typeId.startsWith('chat:')
-  }))
+export async function getCardTypeSummary(client: HulyClient, id: string): Promise<CardTypeSummary> {
+  if (id !== card.class.Card) {
+    await getCardTypeDocById(client, id)
+  }
+
+  const inDefaultSpaceIds = await listAvailableCardTypeIds(client)
+  const [summary] = await mapCardTypeSummaries(client, [id], { inDefaultSpaceIds })
+  return summary
+}
+
+export async function createCardType(
+  client: HulyClient,
+  options: {
+    label: string
+    extends?: string
+  }
+): Promise<CardTypeSummary> {
+  const label = requireNonEmptyString(options.label, 'Card type label')
+  await ensureUniqueCardTypeLabel(client, label)
+
+  const extendsId = await resolveCardType(client, options.extends)
+  const typeId = await client.createDoc(card.class.MasterTag, core.space.Model, {
+    label: toEmbeddedLabel(label),
+    icon: card.icon.MasterTag,
+    kind: 0,
+    extends: extendsId
+  } as never)
+
+  try {
+    await client.updateDoc(card.class.CardSpace, core.space.Space, card.space.Default, {
+      $push: {
+        types: typeId
+      }
+    } as never)
+  } catch (error) {
+    await client.removeDoc(card.class.MasterTag, core.space.Model, typeId as Ref<MasterTag>)
+    throw error
+  }
+
+  return await getCardTypeSummary(client, typeId)
+}
+
+export async function updateCardType(
+  client: HulyClient,
+  id: string,
+  updates: {
+    label?: string
+    extends?: string
+  }
+): Promise<CardTypeSummary> {
+  const typeDoc = await getMutableCardTypeDocById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.label !== undefined) {
+    const label = requireNonEmptyString(updates.label, 'Card type label')
+    await ensureUniqueCardTypeLabel(client, label, typeDoc._id)
+    operations.label = toEmbeddedLabel(label)
+  }
+
+  if (updates.extends !== undefined) {
+    const extendsId = await resolveCardType(client, updates.extends)
+
+    if (extendsId === typeDoc._id) {
+      throw new CliError('VALIDATION_ERROR', 'Card type cannot extend itself.', 4)
+    }
+
+    operations.extends = extendsId
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No card type fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(card.class.MasterTag, core.space.Model, typeDoc._id, operations as never)
+  return await getCardTypeSummary(client, typeDoc._id)
+}
+
+export async function deleteCardType(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const typeDoc = await getMutableCardTypeDocById(client, id)
+  const cardsWithType = await client.findAll(card.class.Card, {
+    _class: typeDoc._id as never
+  }, {
+    limit: 1
+  })
+
+  if (cardsWithType.length > 0) {
+    throw new CliError('VALIDATION_ERROR', `Card type '${id}' is still used by existing cards and cannot be deleted.`, 4)
+  }
+
+  const roles = await client.findAll(card.class.Role, {
+    attachedTo: typeDoc._id as never
+  }, {
+    limit: 200
+  })
+
+  for (const role of roles) {
+    await client.removeDoc(card.class.Role, core.space.Model, role._id)
+  }
+
+  await client.updateDoc(card.class.CardSpace, core.space.Space, card.space.Default, {
+    $pull: {
+      types: typeDoc._id
+    }
+  } as never)
+  await client.removeDoc(card.class.MasterTag, core.space.Model, typeDoc._id)
+
+  return { deleted: true, id: typeDoc._id }
+}
+
+export async function listCardRoles(
+  client: HulyClient,
+  options: {
+    typeId: string
+  }
+): Promise<CardRoleSummary[]> {
+  const typeDoc = await getMutableCardTypeDocById(client, options.typeId)
+  const roles = await client.findAll(card.class.Role, {
+    attachedTo: typeDoc._id as never
+  }, {
+    limit: 200,
+    sort: { name: SortingOrder.Ascending }
+  })
+
+  return await mapCardRoleSummaries(client, roles)
+}
+
+export async function getCardRoleSummary(client: HulyClient, id: string): Promise<CardRoleSummary> {
+  const [summary] = await mapCardRoleSummaries(client, [await getCardRoleById(client, id)])
+  return summary
+}
+
+export async function createCardRole(
+  client: HulyClient,
+  options: {
+    typeId: string
+    name: string
+  }
+): Promise<CardRoleSummary> {
+  const typeDoc = await getMutableCardTypeDocById(client, options.typeId)
+  const name = requireNonEmptyString(options.name, 'Card role name')
+  await ensureUniqueCardRoleName(client, typeDoc._id, name)
+
+  const roleId = await client.addCollection(
+    card.class.Role,
+    core.space.Model,
+    typeDoc._id,
+    card.class.MasterTag,
+    'roles',
+    {
+      name
+    } as never
+  )
+
+  return await getCardRoleSummary(client, roleId)
+}
+
+export async function updateCardRole(
+  client: HulyClient,
+  id: string,
+  updates: {
+    name?: string
+  }
+): Promise<CardRoleSummary> {
+  const role = await getCardRoleById(client, id)
+  await getMutableCardTypeDocById(client, role.attachedTo)
+
+  if (updates.name === undefined) {
+    throw new CliError('VALIDATION_ERROR', 'No card role fields were provided to update.', 4)
+  }
+
+  const name = requireNonEmptyString(updates.name, 'Card role name')
+  await ensureUniqueCardRoleName(client, role.attachedTo, name, role._id)
+  await client.updateDoc(card.class.Role, core.space.Model, role._id, { name } as never)
+
+  return await getCardRoleSummary(client, role._id)
+}
+
+export async function deleteCardRole(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const role = await getCardRoleById(client, id)
+  await getMutableCardTypeDocById(client, role.attachedTo)
+  await client.removeDoc(card.class.Role, core.space.Model, role._id)
+  return { deleted: true, id: role._id }
 }
 
 export async function listCards(

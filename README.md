@@ -31,7 +31,7 @@ Additional implemented commands:
 - `chat list|get|create|update|delete`
 - `chat message list|get|send|update|delete`
 - `comment list|add`
-- `card types|list|get|create|update|delete`
+- `card types|type list|get|create|update|delete|role list|get|create|update|delete|list|get|create|update|delete`
 - `notification list|get|read|unread|archive|unarchive`
 - `time list|get|create|update|done|open|delete`
 - `setup-skill`
@@ -48,9 +48,10 @@ Current `time` scope:
 
 Current `card` scope:
 
-- `card` currently manages cards in Huly's default card space with type listing plus basic CRUD.
-- The smoke-tested write path currently uses the generic `Card` type. Other workspace-specific card types are discoverable through `card types`, but some may have stricter backend behavior.
-- Deeper card-schema work from the long-term PRD, such as custom relations and attributes, is still pending.
+- `card` currently manages cards in Huly's default card space, custom card type CRUD, and attached role CRUD for workspace-defined types.
+- Built-in card types remain readable but intentionally read-only. Custom `card type` and `card role` writes are smoke-tested live.
+- The smoke-tested card create/update/delete path still uses the generic `Card` type. Other workspace-specific card types are discoverable and targetable, but some may have stricter backend behavior.
+- Broader card-schema work from the long-term PRD, such as arbitrary attributes and richer relation semantics, is still pending.
 
 Current `chat` scope:
 
@@ -218,6 +219,18 @@ npm run dev -- card create \
   --title "CLI card" \
   --type Card \
   --content "# Card body"
+```
+
+Create a custom card type and role:
+
+```bash
+npm run dev -- card type create \
+  --label "CLI Smoke Type" \
+  --extends Card
+
+npm run dev -- card role create \
+  --type <type-id> \
+  --name "Blocks"
 ```
 
 Create a chat channel and send a message:

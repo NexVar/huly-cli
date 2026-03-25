@@ -2,7 +2,23 @@ import { Command } from 'commander'
 import { handleCommand } from '../lib/command'
 import { withClient } from '../lib/client'
 import { readTextOption } from '../lib/files'
-import { createCard, deleteCard, getCardSummary, listCards, listCardTypes, updateCard } from '../lib/huly'
+import {
+  createCard,
+  createCardRole,
+  createCardType,
+  deleteCard,
+  deleteCardRole,
+  deleteCardType,
+  getCardRoleSummary,
+  getCardSummary,
+  getCardTypeSummary,
+  listCardRoles,
+  listCards,
+  listCardTypes,
+  updateCard,
+  updateCardRole,
+  updateCardType
+} from '../lib/huly'
 import { CliError } from '../lib/output'
 
 type CardListOptions = {
@@ -23,6 +39,29 @@ type CardUpdateOptions = {
   title?: string
   content?: string
   contentFile?: string
+}
+
+type CardTypeCreateOptions = {
+  label: string
+  extends?: string
+}
+
+type CardTypeUpdateOptions = {
+  label?: string
+  extends?: string
+}
+
+type CardRoleListOptions = {
+  type: string
+}
+
+type CardRoleCreateOptions = {
+  type: string
+  name: string
+}
+
+type CardRoleUpdateOptions = {
+  name?: string
 }
 
 function parseLimit(limit: string | undefined): number | undefined {
@@ -46,6 +85,109 @@ export function registerCardCommands(program: Command): void {
     .description('List available card types in the default card space')
 
   handleCommand(types, async () => await withClient(async (client) => await listCardTypes(client)))
+
+  const type = card
+    .command('type')
+    .description('Card type commands')
+
+  const typeList = type
+    .command('list')
+    .description('List available card types in the default card space')
+
+  handleCommand(typeList, async () => await withClient(async (client) => await listCardTypes(client)))
+
+  const typeGet = type
+    .command('get')
+    .description('Get one card type by id')
+    .argument('<id>', 'Card type id')
+
+  handleCommand(typeGet, async (id: string) => await withClient(async (client) => await getCardTypeSummary(client, id)))
+
+  const typeCreate = type
+    .command('create')
+    .description('Create a custom card type in the default card space')
+    .requiredOption('--label <label>', 'Card type label')
+    .option('--extends <type>', 'Base card type id or label; defaults to Card')
+
+  handleCommand(typeCreate, async (options: CardTypeCreateOptions) => {
+    return await withClient(async (client) => await createCardType(client, {
+      label: options.label,
+      extends: options.extends
+    }))
+  })
+
+  const typeUpdate = type
+    .command('update')
+    .description('Update a custom card type')
+    .argument('<id>', 'Card type id')
+    .option('--label <label>', 'Card type label')
+    .option('--extends <type>', 'Base card type id or label')
+
+  handleCommand(typeUpdate, async (id: string, options: CardTypeUpdateOptions) => {
+    return await withClient(async (client) => await updateCardType(client, id, {
+      label: options.label,
+      extends: options.extends
+    }))
+  })
+
+  const typeDelete = type
+    .command('delete')
+    .description('Delete a custom card type')
+    .argument('<id>', 'Card type id')
+
+  handleCommand(typeDelete, async (id: string) => await withClient(async (client) => await deleteCardType(client, id)))
+
+  const role = card
+    .command('role')
+    .description('Card role commands for custom card types')
+
+  const roleList = role
+    .command('list')
+    .description('List roles on a custom card type')
+    .requiredOption('--type <type>', 'Card type id')
+
+  handleCommand(roleList, async (options: CardRoleListOptions) => {
+    return await withClient(async (client) => await listCardRoles(client, { typeId: options.type }))
+  })
+
+  const roleGet = role
+    .command('get')
+    .description('Get one card role by id')
+    .argument('<id>', 'Card role id')
+
+  handleCommand(roleGet, async (id: string) => await withClient(async (client) => await getCardRoleSummary(client, id)))
+
+  const roleCreate = role
+    .command('create')
+    .description('Create a role on a custom card type')
+    .requiredOption('--type <type>', 'Card type id')
+    .requiredOption('--name <name>', 'Role name')
+
+  handleCommand(roleCreate, async (options: CardRoleCreateOptions) => {
+    return await withClient(async (client) => await createCardRole(client, {
+      typeId: options.type,
+      name: options.name
+    }))
+  })
+
+  const roleUpdate = role
+    .command('update')
+    .description('Update a card role')
+    .argument('<id>', 'Card role id')
+    .option('--name <name>', 'Role name')
+
+  handleCommand(roleUpdate, async (id: string, options: CardRoleUpdateOptions) => {
+    return await withClient(async (client) => await updateCardRole(client, id, {
+      name: options.name
+    }))
+  })
+
+  const roleDelete = role
+    .command('delete')
+    .description('Delete a card role')
+    .argument('<id>', 'Card role id')
+
+  handleCommand(roleDelete, async (id: string) => await withClient(async (client) => await deleteCardRole(client, id)))
 
   const list = card
     .command('list')

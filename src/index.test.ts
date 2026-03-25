@@ -112,8 +112,54 @@ test('main returns JSON for card help', async () => {
   assert.equal(payload.ok, true)
   assert.equal(payload.data.command, 'card')
   assert.ok(payload.data.commands.some((command) => command.name === 'types'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'type'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'role'))
   assert.ok(payload.data.commands.some((command) => command.name === 'list'))
   assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+})
+
+test('main returns JSON for card type help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'card', 'type', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'type')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
+})
+
+test('main returns JSON for card role help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'card', 'role', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'role')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
 })
 
 test('main returns JSON for chat help', async () => {

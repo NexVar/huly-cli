@@ -179,6 +179,23 @@ export type CardTypeSummary = {
   id: string
   label: string
   builtin: boolean
+  inDefaultSpace: boolean
+  extendsId: string | null
+  extendsLabel: string | null
+  color: number | null
+  background: number | null
+  removed: boolean | null
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type CardRoleSummary = {
+  id: string
+  name: string
+  typeId: string
+  typeLabel: string
+  createdOn: string | null
+  modifiedOn: string | null
 }
 
 export type CardSummary = {
