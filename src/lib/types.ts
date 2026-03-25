@@ -196,3 +196,32 @@ export type CardSummary = {
   createdOn: string | null
   modifiedOn: string | null
 }
+
+export type ChatSpaceSummary = {
+  id: string
+  kind: 'channel' | 'direct'
+  name: string | null
+  description: string | null
+  topic: string | null
+  private: boolean
+  archived: boolean
+  autoJoin: boolean | null
+  members: string[]
+  memberCount: number
+  messageCount: number | null
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type ChatMessageSummary = {
+  id: string
+  chatId: string
+  chatKind: 'channel' | 'direct'
+  chatName: string | null
+  message: string
+  author: string
+  authorId: string
+  createdOn: string | null
+  modifiedOn: string | null
+  editedOn: string | null
+}

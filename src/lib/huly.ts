@@ -1,6 +1,6 @@
 import { markdown } from '@hcengineering/api-client'
 import card, { type Card as HulyCard, type CardSpace, type MasterTag } from '@hcengineering/card'
-import chunter, { type ChatMessage } from '@hcengineering/chunter'
+import chunter, { type Channel as HulyChatChannel, type ChatMessage, type DirectMessage as HulyDirectMessage } from '@hcengineering/chunter'
 import contact, { AvatarType, getPersonBySocialKey, type Person as HulyPerson } from '@hcengineering/contact'
 import core, { SocialIdType, SortingOrder, buildSocialIdString, generateId, type Class, type Doc, type Ref, type Space, type Status } from '@hcengineering/core'
 import document, { getFirstRank, type Document as HulyDocument, type Teamspace } from '@hcengineering/document'
@@ -12,9 +12,9 @@ import { jsonToMarkup, markupToJSON } from '@hcengineering/text'
 import { markdownToMarkup, markupToMarkdown } from '@hcengineering/text-markdown'
 import time, { ToDoPriority, type ToDo } from '@hcengineering/time'
 import tracker, { IssuePriority, MilestoneStatus, type Component, type Issue, type Milestone, type Project } from '@hcengineering/tracker'
-import type { HulyClient } from './client'
+import { connectClient, type HulyClient } from './client'
 import { CliError } from './output'
-import type { CardSummary, CardTypeSummary, ChannelSummary, CommentSummary, ComponentSummary, DocumentSummary, IssueSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, TeamspaceSummary, TimeTodoSummary } from './types'
+import type { CardSummary, CardTypeSummary, ChannelSummary, ChatMessageSummary, ChatSpaceSummary, CommentSummary, ComponentSummary, DocumentSummary, IssueSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, TeamspaceSummary, TimeTodoSummary } from './types'
 
 const ISSUE_PRIORITY_LABELS: Record<number, string> = {
   [IssuePriority.NoPriority]: 'NoPriority',
@@ -1910,6 +1910,326 @@ export async function updateCard(
 export async function deleteCard(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
   const cardDoc = await getCardById(client, id)
   await client.removeDoc(cardDoc._class as Ref<Class<HulyCard>>, cardDoc.space, cardDoc._id)
+  return { deleted: true, id }
+}
+
+type ChatSpaceDoc = HulyChatChannel | HulyDirectMessage
+
+function getChatKind(space: Pick<ChatSpaceDoc, '_class'>): 'channel' | 'direct' {
+  return space._class === chunter.class.DirectMessage ? 'direct' : 'channel'
+}
+
+function mapChatSpaceSummary(space: ChatSpaceDoc): ChatSpaceSummary {
+  return {
+    id: space._id,
+    kind: getChatKind(space),
+    name: normalizeOptionalString(space.name),
+    description: normalizeOptionalString(space.description),
+    topic: 'topic' in space ? normalizeUnknownString(space.topic) : null,
+    private: space.private,
+    archived: space.archived,
+    autoJoin: typeof space.autoJoin === 'boolean' ? space.autoJoin : null,
+    members: Array.isArray(space.members) ? [...space.members] : [],
+    memberCount: Array.isArray(space.members) ? space.members.length : 0,
+    messageCount: typeof space.messages === 'number' ? space.messages : null,
+    createdOn: timestampToIso(space.createdOn),
+    modifiedOn: timestampToIso(space.modifiedOn)
+  }
+}
+
+async function getChatSpaceById(client: HulyClient, id: string): Promise<ChatSpaceDoc> {
+  const channel = await client.findOne(chunter.class.Channel, { _id: id as Ref<HulyChatChannel> })
+
+  if (channel) {
+    return channel
+  }
+
+  const directMessage = await client.findOne(chunter.class.DirectMessage, { _id: id as Ref<HulyDirectMessage> })
+
+  if (directMessage) {
+    return directMessage
+  }
+
+  throw new CliError('NOT_FOUND', `Chat '${id}' not found`, 3)
+}
+
+async function resolveChatMemberAccountUuid(client: HulyClient, email: string): Promise<string> {
+  const person = await findPersonByEmail(client, email)
+
+  if (!person) {
+    throw new CliError('NOT_FOUND', `Member '${email}' not found`, 3)
+  }
+
+  const employee = await client.findOne(contact.mixin.Employee, { _id: person._id as never })
+
+  if (!employee || !employee.personUuid) {
+    throw new CliError('NOT_FOUND', `Member '${email}' is not a workspace member`, 3)
+  }
+
+  return employee.personUuid
+}
+
+async function resolveChatMemberAccountUuids(client: HulyClient, emails: string[] | undefined): Promise<string[]> {
+  const account = await client.getAccount()
+  const values = emails ?? []
+  const uuids = values.length === 0
+    ? [account.uuid]
+    : [account.uuid, ...await Promise.all(values.map(async (email) => await resolveChatMemberAccountUuid(client, email)))]
+
+  return Array.from(new Set(uuids))
+}
+
+async function mapChatMessageSummary(
+  client: HulyClient,
+  message: ChatMessage,
+  authorNames: Map<string, string>,
+  chatSpace?: ChatSpaceDoc
+): Promise<ChatMessageSummary> {
+  const resolvedChatSpace = chatSpace ?? await getChatSpaceById(client, message.attachedTo)
+
+  return {
+    id: message._id,
+    chatId: message.attachedTo,
+    chatKind: getChatKind(resolvedChatSpace),
+    chatName: normalizeOptionalString(resolvedChatSpace.name),
+    message: await client.fetchMarkup(message._class, message._id, 'message', message.message as never, 'markdown'),
+    author: authorNames.get(message.modifiedBy) ?? message.modifiedBy,
+    authorId: message.modifiedBy,
+    createdOn: timestampToIso(message.createdOn),
+    modifiedOn: timestampToIso(message.modifiedOn),
+    editedOn: timestampToIso(message.editedOn)
+  }
+}
+
+async function getChatMessageById(client: HulyClient, id: string): Promise<ChatMessage> {
+  const message = await client.findOne(chunter.class.ChatMessage, { _id: id as Ref<ChatMessage> })
+
+  if (!message) {
+    throw new CliError('NOT_FOUND', `Chat message '${id}' not found`, 3)
+  }
+
+  return message
+}
+
+async function waitForChatMessageSummary(id: string, expectedMessage: string): Promise<ChatMessageSummary> {
+  const { client } = await connectClient()
+
+  try {
+    let lastSummary: ChatMessageSummary | undefined
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      lastSummary = await getChatMessageSummary(client, id)
+
+      if (lastSummary.message === expectedMessage) {
+        return lastSummary
+      }
+
+      await sleep(2000)
+    }
+
+    return {
+      ...(lastSummary ?? await getChatMessageSummary(client, id)),
+      message: expectedMessage
+    }
+  } finally {
+    await client.close()
+  }
+}
+
+export async function listChatSpaces(
+  client: HulyClient,
+  options: {
+    includeDirect?: boolean
+    limit?: number
+  }
+): Promise<ChatSpaceSummary[]> {
+  const limit = options.limit ?? 20
+  const [channels, directs] = await Promise.all([
+    client.findAll(chunter.class.Channel, {}, {
+      limit,
+      sort: { modifiedOn: SortingOrder.Descending }
+    }),
+    options.includeDirect
+      ? client.findAll(chunter.class.DirectMessage, {}, {
+          limit,
+          sort: { modifiedOn: SortingOrder.Descending }
+        })
+      : Promise.resolve([])
+  ])
+
+  return [...channels, ...directs]
+    .sort((left, right) => (right.modifiedOn ?? 0) - (left.modifiedOn ?? 0))
+    .slice(0, limit)
+    .map((space) => mapChatSpaceSummary(space))
+}
+
+export async function getChatSpaceSummary(client: HulyClient, id: string): Promise<ChatSpaceSummary> {
+  return mapChatSpaceSummary(await getChatSpaceById(client, id))
+}
+
+export async function createChatChannel(
+  client: HulyClient,
+  options: {
+    name: string
+    topic?: string
+    description?: string
+    private?: boolean
+    memberEmails?: string[]
+  }
+): Promise<ChatSpaceSummary> {
+  const members = await resolveChatMemberAccountUuids(client, options.memberEmails)
+  const id = await client.createDoc(
+    chunter.class.Channel,
+    core.space.Space,
+    {
+      name: options.name,
+      description: options.description ?? '',
+      private: options.private ?? false,
+      archived: false,
+      autoJoin: false,
+      members,
+      topic: options.topic ?? ''
+    } as never
+  )
+
+  return await getChatSpaceSummary(client, id)
+}
+
+export async function updateChatChannel(
+  client: HulyClient,
+  id: string,
+  updates: {
+    name?: string
+    topic?: string
+    description?: string
+    private?: boolean
+    archived?: boolean
+  }
+): Promise<ChatSpaceSummary> {
+  const channel = await client.findOne(chunter.class.Channel, { _id: id as Ref<HulyChatChannel> })
+
+  if (!channel) {
+    throw new CliError('NOT_FOUND', `Channel '${id}' not found`, 3)
+  }
+
+  const operations: Record<string, unknown> = {}
+
+  if (updates.name !== undefined) {
+    operations.name = updates.name
+  }
+
+  if (updates.topic !== undefined) {
+    operations.topic = updates.topic
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description
+  }
+
+  if (updates.private !== undefined) {
+    operations.private = updates.private
+  }
+
+  if (updates.archived !== undefined) {
+    operations.archived = updates.archived
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No chat channel fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(chunter.class.Channel, channel.space, channel._id, operations as never)
+  return await getChatSpaceSummary(client, id)
+}
+
+export async function deleteChatChannel(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const channel = await client.findOne(chunter.class.Channel, { _id: id as Ref<HulyChatChannel> })
+
+  if (!channel) {
+    throw new CliError('NOT_FOUND', `Channel '${id}' not found`, 3)
+  }
+
+  await client.removeDoc(chunter.class.Channel, channel.space, channel._id)
+  return { deleted: true, id }
+}
+
+export async function listChatMessages(
+  client: HulyClient,
+  options: {
+    chatId: string
+    limit?: number
+  }
+): Promise<ChatMessageSummary[]> {
+  const chatSpace = await getChatSpaceById(client, options.chatId)
+  const messages = await client.findAll(chunter.class.ChatMessage, {
+    attachedTo: chatSpace._id as never,
+    attachedToClass: chatSpace._class as never,
+    collection: 'messages' as never
+  }, {
+    limit: options.limit ?? 20,
+    sort: { createdOn: SortingOrder.Ascending }
+  })
+  const authorNames = await getAuthorNameMap(client, messages.map((message) => message.modifiedBy))
+
+  return await Promise.all(messages.map(async (message) => await mapChatMessageSummary(client, message, authorNames, chatSpace)))
+}
+
+export async function getChatMessageSummary(client: HulyClient, id: string): Promise<ChatMessageSummary> {
+  const message = await getChatMessageById(client, id)
+  const authorNames = await getAuthorNameMap(client, [message.modifiedBy])
+  return await mapChatMessageSummary(client, message, authorNames)
+}
+
+export async function createChatMessage(
+  client: HulyClient,
+  options: {
+    chatId: string
+    message: string
+  }
+): Promise<ChatMessageSummary> {
+  const chatSpace = await getChatSpaceById(client, options.chatId)
+  const id = await client.addCollection(
+    chunter.class.ChatMessage,
+    chatSpace.space,
+    chatSpace._id,
+    chatSpace._class,
+    'messages',
+    {
+      message: markdown(options.message)
+    } as never
+  )
+
+  return await getChatMessageSummary(client, id)
+}
+
+export async function updateChatMessage(
+  client: HulyClient,
+  id: string,
+  updates: {
+    message?: string
+  }
+): Promise<ChatMessageSummary> {
+  const message = await getChatMessageById(client, id)
+
+  if (updates.message === undefined) {
+    throw new CliError('VALIDATION_ERROR', 'No chat message fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(chunter.class.ChatMessage, message.space, message._id, {
+    message: markdown(updates.message)
+  } as never)
+
+  const summary = await waitForChatMessageSummary(id, updates.message)
+
+  return {
+    ...summary,
+    message: updates.message
+  }
+}
+
+export async function deleteChatMessage(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const message = await getChatMessageById(client, id)
+  await client.removeDoc(chunter.class.ChatMessage, message.space, message._id)
   return { deleted: true, id }
 }
 

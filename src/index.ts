@@ -1,6 +1,7 @@
 import { Command, CommanderError } from 'commander'
 import { registerAuthCommands } from './commands/auth'
 import { registerCardCommands } from './commands/card'
+import { registerChatCommands } from './commands/chat'
 import { registerCommentCommands } from './commands/comment'
 import { registerComponentCommands } from './commands/component'
 import { registerDocumentCommands } from './commands/document'
@@ -63,6 +64,7 @@ export function buildProgram(): Command {
 
   registerAuthCommands(program)
   registerCardCommands(program)
+  registerChatCommands(program)
   registerProjectCommands(program)
   registerIssueCommands(program)
   registerLabelCommands(program)

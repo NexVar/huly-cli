@@ -28,6 +28,8 @@ Additional implemented commands:
 - `milestone list|create|update`
 - `label list|create|assign`
 - `component list|create`
+- `chat list|get|create|update|delete`
+- `chat message list|get|send|update|delete`
 - `comment list|add`
 - `card types|list|get|create|update|delete`
 - `notification list|get|read|unread|archive|unarchive`
@@ -36,8 +38,8 @@ Additional implemented commands:
 
 Current scope details:
 
-- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `card`, `notification`, `time`, `setup-skill`
-- Not implemented yet: remaining Phase 5 modules such as `hr`, `board`, `drive`, `chat`, `recruit`
+- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `card`, `chat`, `notification`, `time`, `setup-skill`
+- Not implemented yet: remaining Phase 5 modules such as `hr`, `board`, `drive`, `recruit`
 
 Current `time` scope:
 
@@ -49,6 +51,12 @@ Current `card` scope:
 - `card` currently manages cards in Huly's default card space with type listing plus basic CRUD.
 - The smoke-tested write path currently uses the generic `Card` type. Other workspace-specific card types are discoverable through `card types`, but some may have stricter backend behavior.
 - Deeper card-schema work from the long-term PRD, such as custom relations and attributes, is still pending.
+
+Current `chat` scope:
+
+- `chat` currently manages chat channels plus chat messages attached to channels or direct-message chats by id.
+- Channel CRUD is smoke-tested. Message create and delete are smoke-tested. Message updates use bounded settle polling before returning, but fresh `chat message get` reads can still lag after an update on the Huly backend.
+- Deeper chat coverage from the long-term PRD, such as richer thread handling and membership-management workflows, is still pending.
 
 ## Install
 
@@ -142,6 +150,7 @@ npm run dev -- person list --limit 20
 npm run dev -- milestone list --project WEBSI
 npm run dev -- label list
 npm run dev -- component list --project WEBSI
+npm run dev -- chat list --include-direct --limit 10
 npm run dev -- comment list --on WEBSI-123
 npm run dev -- card list --type Card --limit 10
 npm run dev -- notification list --unread --active
@@ -159,6 +168,7 @@ node dist/bin/huly.js person list
 node dist/bin/huly.js milestone list --project WEBSI
 node dist/bin/huly.js label list
 node dist/bin/huly.js component list --project WEBSI
+node dist/bin/huly.js chat list --limit 10
 node dist/bin/huly.js comment list --on WEBSI-123
 node dist/bin/huly.js card list --type Card --limit 10
 node dist/bin/huly.js notification list --limit 10
@@ -208,6 +218,18 @@ npm run dev -- card create \
   --title "CLI card" \
   --type Card \
   --content "# Card body"
+```
+
+Create a chat channel and send a message:
+
+```bash
+npm run dev -- chat create \
+  --name "cli-smoke-channel" \
+  --topic "CLI smoke"
+
+npm run dev -- chat message send \
+  --chat <chat-id> \
+  --message "Hello from huly-cli"
 ```
 
 Create a document:

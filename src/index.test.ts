@@ -46,6 +46,7 @@ test('main returns JSON for --help', async () => {
   assert.equal(payload.ok, true)
   assert.equal(payload.data.command, 'huly')
   assert.ok(payload.data.commands.some((command) => command.name === 'card'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'chat'))
   assert.ok(payload.data.commands.some((command) => command.name === 'notification'))
   assert.ok(payload.data.commands.some((command) => command.name === 'time'))
   assert.ok(payload.data.commands.some((command) => command.name === 'setup-skill'))
@@ -113,6 +114,50 @@ test('main returns JSON for card help', async () => {
   assert.ok(payload.data.commands.some((command) => command.name === 'types'))
   assert.ok(payload.data.commands.some((command) => command.name === 'list'))
   assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+})
+
+test('main returns JSON for chat help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'chat', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'chat')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'message'))
+})
+
+test('main returns JSON for chat message help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'chat', 'message', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'message')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'send'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
 })
 
 test('main returns JSON for time help', async () => {
