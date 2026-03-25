@@ -24,6 +24,8 @@ type IssueCreateOptions = {
   labels?: string
   dueDate?: string
   parent?: string
+  estimation?: string
+  remainingTime?: string
 }
 
 type IssueUpdateOptions = {
@@ -35,6 +37,8 @@ type IssueUpdateOptions = {
   assignee?: string
   dueDate?: string
   milestone?: string
+  estimation?: string
+  remainingTime?: string
 }
 
 function parseLimit(limit: string | undefined): number | undefined {
@@ -65,6 +69,20 @@ function parseLabels(labels: string | undefined): string[] | undefined {
   }
 
   return Array.from(new Set(parsed))
+}
+
+function parseHours(value: string | undefined, flagName: string): number | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+
+  const parsed = Number(value)
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new CliError('VALIDATION_ERROR', `Invalid ${flagName} value: ${value}`, 4)
+  }
+
+  return parsed
 }
 
 export function registerIssueCommands(program: Command): void {
@@ -111,6 +129,8 @@ export function registerIssueCommands(program: Command): void {
     .option('--labels <titles>', 'Comma-separated label titles')
     .option('--due-date <date>', 'Due date in ISO-8601 format')
     .option('--parent <identifier>', 'Parent issue identifier')
+    .option('--estimation <hours>', 'Initial estimation in hours')
+    .option('--remaining-time <hours>', 'Initial remaining time in hours')
 
   handleCommand(create, async (options: IssueCreateOptions) => {
     const description = await readTextOption(options.description, options.descriptionFile, 'description')
@@ -124,7 +144,9 @@ export function registerIssueCommands(program: Command): void {
       assignee: options.assignee,
       labels,
       dueDate: options.dueDate,
-      parent: options.parent
+      parent: options.parent,
+      estimation: parseHours(options.estimation, '--estimation'),
+      remainingTime: parseHours(options.remainingTime, '--remaining-time')
     }))
   })
 
@@ -140,6 +162,8 @@ export function registerIssueCommands(program: Command): void {
     .option('--assignee <email>', 'Assignee email')
     .option('--due-date <date>', 'Due date in ISO-8601 format')
     .option('--milestone <name>', 'Milestone label')
+    .option('--estimation <hours>', 'Estimation in hours')
+    .option('--remaining-time <hours>', 'Remaining time in hours')
 
   handleCommand(update, async (identifier: string, options: IssueUpdateOptions) => {
     const description = await readTextOption(options.description, options.descriptionFile, 'description')
@@ -151,7 +175,9 @@ export function registerIssueCommands(program: Command): void {
       priority: options.priority,
       assignee: options.assignee,
       dueDate: options.dueDate,
-      milestone: options.milestone
+      milestone: options.milestone,
+      estimation: parseHours(options.estimation, '--estimation'),
+      remainingTime: parseHours(options.remainingTime, '--remaining-time')
     }))
   })
 

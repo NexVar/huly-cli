@@ -3,12 +3,17 @@ import { handleCommand } from '../lib/command'
 import { withClient } from '../lib/client'
 import { readTextOption } from '../lib/files'
 import {
+  createTimeReport,
   createTimeTodo,
+  deleteTimeReport,
   deleteTimeTodo,
+  getTimeReportSummary,
   getTimeTodoSummary,
+  listTimeReports,
   listTimeTodos,
   reopenTimeTodo,
   completeTimeTodo,
+  updateTimeReport,
   updateTimeTodo
 } from '../lib/huly'
 import { CliError } from '../lib/output'
@@ -31,6 +36,22 @@ type TimeCreateOptions = {
   dueDate?: string
 }
 
+type TimeReportListOptions = {
+  issue?: string
+  assignee?: string
+  dateFrom?: string
+  dateTo?: string
+  limit?: string
+}
+
+type TimeReportCreateOptions = {
+  issue: string
+  value: string
+  description: string
+  assignee?: string
+  date?: string
+}
+
 type TimeUpdateOptions = {
   title?: string
   description?: string
@@ -38,6 +59,13 @@ type TimeUpdateOptions = {
   priority?: string
   assignee?: string
   dueDate?: string
+}
+
+type TimeReportUpdateOptions = {
+  value?: string
+  description?: string
+  assignee?: string
+  date?: string
 }
 
 function parseLimit(limit: string | undefined): number | undefined {
@@ -67,6 +95,32 @@ function parseDoneFilter(options: TimeListOptions): boolean | undefined {
   }
 
   return undefined
+}
+
+function parseHours(value: string | undefined, flagName: string): number | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new CliError('VALIDATION_ERROR', `Invalid ${flagName} value: ${value}`, 4)
+  }
+
+  return parsed
+}
+
+function parseIsoDate(value: string | undefined, flagName: string): string | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+
+  const timestamp = new Date(value).getTime()
+  if (Number.isNaN(timestamp)) {
+    throw new CliError('VALIDATION_ERROR', `Invalid ${flagName} value: ${value}`, 4)
+  }
+
+  return value
 }
 
 export function registerTimeCommands(program: Command): void {
@@ -164,4 +218,76 @@ export function registerTimeCommands(program: Command): void {
     .argument('<id>', 'Todo id')
 
   handleCommand(remove, async (id: string) => await withClient(async (client) => await deleteTimeTodo(client, id)))
+
+  const report = time.command('report').description('Issue time report commands')
+
+  const reportList = report
+    .command('list')
+    .description('List issue time reports')
+    .option('--issue <identifier>', 'Filter by issue identifier')
+    .option('--assignee <email>', 'Filter by assignee email')
+    .option('--date-from <date>', 'Only include reports on or after this ISO-8601 date')
+    .option('--date-to <date>', 'Only include reports on or before this ISO-8601 date')
+    .option('--limit <n>', 'Maximum number of time reports')
+
+  handleCommand(reportList, async (options: TimeReportListOptions) => {
+    return await withClient(async (client) => await listTimeReports(client, {
+      issueIdentifier: options.issue,
+      assignee: options.assignee,
+      dateFrom: parseIsoDate(options.dateFrom, '--date-from'),
+      dateTo: parseIsoDate(options.dateTo, '--date-to'),
+      limit: parseLimit(options.limit)
+    }))
+  })
+
+  const reportGet = report
+    .command('get')
+    .description('Get one time report by id')
+    .argument('<id>', 'Time report id')
+
+  handleCommand(reportGet, async (id: string) => await withClient(async (client) => await getTimeReportSummary(client, id)))
+
+  const reportCreate = report
+    .command('create')
+    .description('Create a time report on an issue')
+    .requiredOption('--issue <identifier>', 'Issue identifier')
+    .requiredOption('--value <hours>', 'Reported time in hours')
+    .requiredOption('--description <text>', 'Time report description')
+    .option('--assignee <email>', 'Assignee email; defaults to the current member')
+    .option('--date <date>', 'Report date in ISO-8601 format; defaults to now')
+
+  handleCommand(reportCreate, async (options: TimeReportCreateOptions) => {
+    return await withClient(async (client) => await createTimeReport(client, {
+      issueIdentifier: options.issue,
+      value: parseHours(options.value, '--value') as number,
+      description: options.description,
+      assignee: options.assignee,
+      date: parseIsoDate(options.date, '--date')
+    }))
+  })
+
+  const reportUpdate = report
+    .command('update')
+    .description('Update an existing time report')
+    .argument('<id>', 'Time report id')
+    .option('--value <hours>', 'Reported time in hours')
+    .option('--description <text>', 'Time report description')
+    .option('--assignee <email>', 'Assignee email')
+    .option('--date <date>', 'Report date in ISO-8601 format')
+
+  handleCommand(reportUpdate, async (id: string, options: TimeReportUpdateOptions) => {
+    return await withClient(async (client) => await updateTimeReport(client, id, {
+      value: parseHours(options.value, '--value'),
+      description: options.description,
+      assignee: options.assignee,
+      date: parseIsoDate(options.date, '--date')
+    }))
+  })
+
+  const reportDelete = report
+    .command('delete')
+    .description('Delete a time report')
+    .argument('<id>', 'Time report id')
+
+  handleCommand(reportDelete, async (id: string) => await withClient(async (client) => await deleteTimeReport(client, id)))
 }

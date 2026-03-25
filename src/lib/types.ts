@@ -66,6 +66,9 @@ export type IssueSummary = {
   dueDate: string | null
   number: number | null
   milestone: string | null
+  estimation: number
+  remainingTime: number
+  reportedTime: number
   labels: string[]
   parentId: string | null
   parentIdentifier: string | null
@@ -175,6 +178,21 @@ export type TimeTodoSummary = {
   modifiedOn: string | null
 }
 
+export type TimeReportSummary = {
+  id: string
+  class: string
+  issue: string | null
+  issueId: string | null
+  employee: string | null
+  employeeEmail: string | null
+  employeeId: string | null
+  date: string | null
+  value: number
+  description: string
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
 export type CardTypeSummary = {
   id: string
   label: string
@@ -228,6 +246,13 @@ export type ChatSpaceSummary = {
   messageCount: number | null
   createdOn: string | null
   modifiedOn: string | null
+}
+
+export type ChatMemberSummary = {
+  accountUuid: string
+  memberId: string | null
+  name: string | null
+  email: string | null
 }
 
 export type ChatMessageSummary = {

@@ -2,7 +2,21 @@ import { Command } from 'commander'
 import { handleCommand } from '../lib/command'
 import { withClient } from '../lib/client'
 import { readTextOption } from '../lib/files'
-import { createChatChannel, createChatMessage, deleteChatChannel, deleteChatMessage, getChatMessageSummary, getChatSpaceSummary, listChatMessages, listChatSpaces, updateChatChannel, updateChatMessage } from '../lib/huly'
+import {
+  addChatMembers,
+  createChatChannel,
+  createChatMessage,
+  deleteChatChannel,
+  deleteChatMessage,
+  getChatMessageSummary,
+  getChatSpaceSummary,
+  listChatMembers,
+  listChatMessages,
+  listChatSpaces,
+  removeChatMembers,
+  updateChatChannel,
+  updateChatMessage
+} from '../lib/huly'
 import { CliError } from '../lib/output'
 
 type ChatListOptions = {
@@ -42,6 +56,10 @@ type ChatMessageCreateOptions = {
 type ChatMessageUpdateOptions = {
   message?: string
   messageFile?: string
+}
+
+type ChatMemberMutateOptions = {
+  member: string[]
 }
 
 function parseLimit(limit: string | undefined): number | undefined {
@@ -164,6 +182,43 @@ export function registerChatCommands(program: Command): void {
     .argument('<id>', 'Chat channel id')
 
   handleCommand(remove, async (id: string) => await withClient(async (client) => await deleteChatChannel(client, id)))
+
+  const member = chat.command('member').description('Chat channel member commands')
+
+  const memberList = member
+    .command('list')
+    .description('List members in a chat channel')
+    .argument('<id>', 'Chat channel id')
+
+  handleCommand(memberList, async (id: string) => await withClient(async (client) => await listChatMembers(client, id)))
+
+  const memberAdd = member
+    .command('add')
+    .description('Add members to a chat channel')
+    .argument('<id>', 'Chat channel id')
+    .option('--member <email>', 'Add a member by email; may be repeated', collectValues, [])
+
+  handleCommand(memberAdd, async (id: string, options: ChatMemberMutateOptions) => {
+    if (options.member.length === 0) {
+      throw new CliError('VALIDATION_ERROR', 'At least one --member value is required.', 4)
+    }
+
+    return await withClient(async (client) => await addChatMembers(client, id, options.member))
+  })
+
+  const memberRemove = member
+    .command('remove')
+    .description('Remove members from a chat channel')
+    .argument('<id>', 'Chat channel id')
+    .option('--member <email>', 'Remove a member by email; may be repeated', collectValues, [])
+
+  handleCommand(memberRemove, async (id: string, options: ChatMemberMutateOptions) => {
+    if (options.member.length === 0) {
+      throw new CliError('VALIDATION_ERROR', 'At least one --member value is required.', 4)
+    }
+
+    return await withClient(async (client) => await removeChatMembers(client, id, options.member))
+  })
 
   const message = chat.command('message').description('Chat message commands')
 

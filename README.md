@@ -29,11 +29,13 @@ Additional implemented commands:
 - `label list|create|assign`
 - `component list|create`
 - `chat list|get|create|update|delete`
+- `chat member list|add|remove`
 - `chat message list|get|send|update|delete`
 - `comment list|add`
 - `card types|type list|get|create|update|delete|role list|get|create|update|delete|list|get|create|update|delete`
 - `notification list|get|read|unread|archive|unarchive`
 - `time list|get|create|update|done|open|delete`
+- `time report list|get|create|update|delete`
 - `setup-skill`
 
 Current scope details:
@@ -43,8 +45,9 @@ Current scope details:
 
 Current `time` scope:
 
-- `time` currently manages issue-attached todos through Huly's published time package.
-- Full time-report and logged-time coverage from the long-term PRD is still pending.
+- `time` currently manages issue-attached todos plus issue-attached `TimeSpendReport` entries through Huly's published time and tracker packages.
+- Time-report CRUD is implemented and intended for automation-friendly logging against tracker issues.
+- Broader logged-time/reporting coverage from the long-term PRD, such as aggregated report views, is still pending.
 
 Current `card` scope:
 
@@ -55,9 +58,14 @@ Current `card` scope:
 
 Current `chat` scope:
 
-- `chat` currently manages chat channels plus chat messages attached to channels or direct-message chats by id.
-- Channel CRUD is smoke-tested. Message create and delete are smoke-tested. Message updates use bounded settle polling before returning, but fresh `chat message get` reads can still lag after an update on the Huly backend.
-- Deeper chat coverage from the long-term PRD, such as richer thread handling and membership-management workflows, is still pending.
+- `chat` currently manages chat channels, channel membership updates, and chat messages attached to channels or direct-message chats by id.
+- Channel CRUD is smoke-tested. Channel member list/add/remove is smoke-tested live with disposable channels. Message create and delete are smoke-tested. Message updates use bounded settle polling before returning, but fresh `chat message get` reads can still lag after an update on the Huly backend.
+- Deeper chat coverage from the long-term PRD, such as richer thread handling and direct-message lifecycle workflows, is still pending.
+
+Current `issue` scope:
+
+- `issue` now surfaces `estimation`, `remainingTime`, and `reportedTime` in issue output, and supports `--estimation` / `--remaining-time` on `issue create` and `issue update`.
+- Live smoke confirmed these fields round-trip, but Huly recalculates `remainingTime` when `estimation` changes. The CLI reports the backend result rather than pretending independent control over both fields.
 
 ## Install
 
@@ -152,10 +160,12 @@ npm run dev -- milestone list --project WEBSI
 npm run dev -- label list
 npm run dev -- component list --project WEBSI
 npm run dev -- chat list --include-direct --limit 10
+npm run dev -- chat member list <chat-id>
 npm run dev -- comment list --on WEBSI-123
 npm run dev -- card list --type Card --limit 10
 npm run dev -- notification list --unread --active
 npm run dev -- time list --issue HULY-1
+npm run dev -- time report list --issue HULY-1
 ```
 
 Using the built binary:
@@ -170,10 +180,12 @@ node dist/bin/huly.js milestone list --project WEBSI
 node dist/bin/huly.js label list
 node dist/bin/huly.js component list --project WEBSI
 node dist/bin/huly.js chat list --limit 10
+node dist/bin/huly.js chat member list <chat-id>
 node dist/bin/huly.js comment list --on WEBSI-123
 node dist/bin/huly.js card list --type Card --limit 10
 node dist/bin/huly.js notification list --limit 10
 node dist/bin/huly.js time list --limit 10
+node dist/bin/huly.js time report list --limit 10
 node dist/bin/huly.js setup-skill
 ```
 
@@ -195,10 +207,27 @@ npm run dev -- issue create \
   --parent WEBSI-123
 ```
 
+Create an issue with time metrics:
+
+```bash
+npm run dev -- issue create \
+  --project WEBSI \
+  --title "Tracked task" \
+  --estimation 4 \
+  --remaining-time 2.5
+```
+
 Update an issue milestone:
 
 ```bash
 npm run dev -- issue update WEBSI-123 --milestone "Sprint 1"
+```
+
+Update issue time metrics:
+
+```bash
+npm run dev -- issue update WEBSI-123 --estimation 6
+npm run dev -- issue update WEBSI-123 --remaining-time 1.5
 ```
 
 Create and complete an issue todo:
@@ -212,6 +241,17 @@ npm run dev -- time create \
 npm run dev -- time done <todo-id>
 ```
 
+Create and update a time report:
+
+```bash
+npm run dev -- time report create \
+  --issue HULY-1 \
+  --value 1.5 \
+  --description "Investigated and fixed the CLI path"
+
+npm run dev -- time report update <report-id> --value 2 --description "Included verification"
+```
+
 Create a card:
 
 ```bash
@@ -219,6 +259,14 @@ npm run dev -- card create \
   --title "CLI card" \
   --type Card \
   --content "# Card body"
+```
+
+Manage channel members:
+
+```bash
+npm run dev -- chat member list <chat-id>
+npm run dev -- chat member add <chat-id> --member teammate@example.com
+npm run dev -- chat member remove <chat-id> --member teammate@example.com
 ```
 
 Create a custom card type and role:
