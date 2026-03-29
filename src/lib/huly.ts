@@ -3784,6 +3784,7 @@ export async function listBoardCards(
   options: {
     boardId?: string
     status?: string | null
+    assigneeId?: string | null
     limit?: number
   }
 ): Promise<BoardCardSummary[]> {
@@ -3795,6 +3796,12 @@ export async function listBoardCards(
 
   if (options.status !== undefined) {
     query.status = options.status ?? ''
+  }
+
+  if (options.assigneeId !== undefined) {
+    query.assignee = options.assigneeId === null
+      ? null
+      : (await getPersonById(client, options.assigneeId))._id
   }
 
   const cards = await client.findAll(board.class.Card as any, query as never, {
@@ -3817,6 +3824,7 @@ export async function createBoardCard(
     title: string
     description?: string
     status?: string
+    assigneeId?: string
     location?: string
     startDate?: string
     dueDate?: string
@@ -3825,6 +3833,7 @@ export async function createBoardCard(
 ): Promise<BoardCardSummary> {
   const boardDoc = await getBoardById(client, options.boardId)
   const title = requireNonEmptyString(options.title, 'Board card title')
+  const assignee = options.assigneeId === undefined ? null : (await getPersonById(client, options.assigneeId))._id
   const [lastByNumber, lastByRank] = await Promise.all([
     client.findOne(board.class.Card as any, { attachedTo: boardDoc._id as never }, {
       sort: { number: SortingOrder.Descending }
@@ -3846,7 +3855,7 @@ export async function createBoardCard(
       kind: board.taskType.Card as any,
       status: options.status ? requireNonEmptyString(options.status, 'Board card status') : '',
       number: (typeof lastByNumber?.number === 'number' ? lastByNumber.number : 0) + 1,
-      assignee: null,
+      assignee,
       dueDate: options.dueDate ? Date.parse(options.dueDate) : null,
       rank: makeRank(lastByRank?.rank, undefined),
       startDate: options.startDate ? Date.parse(options.startDate) : null,
@@ -3869,6 +3878,7 @@ export async function updateBoardCard(
     title?: string
     description?: string
     status?: string | null
+    assigneeId?: string | null
     location?: string | null
     startDate?: string | null
     dueDate?: string | null
@@ -3888,6 +3898,10 @@ export async function updateBoardCard(
 
   if (updates.status !== undefined) {
     operations.status = updates.status === null ? '' : requireNonEmptyString(updates.status, 'Board card status')
+  }
+
+  if (updates.assigneeId !== undefined) {
+    operations.assignee = updates.assigneeId === null ? null : (await getPersonById(client, updates.assigneeId))._id
   }
 
   if (updates.location !== undefined) {

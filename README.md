@@ -94,8 +94,8 @@ Current `issue` scope:
 Current `board` / `drive` scope:
 
 - `board` supports list|get|create|update|delete against workspace spaces, `board column list` as a read-only view of live card-status groupings, and `board card list|get|create|update|delete` for board-attached cards.
-- Board-card writes use the verified attached-document path on `board.class.Board -> cards`, with markdown description support and start/due date, location, archive-state updates, and status round-tripping through Huly status refs.
-- `board card list` supports status filtering, `board card create|update` support explicit status ids, and `board column list` groups current cards by status with friendly status/category names when the referenced model status exists.
+- Board-card writes use the verified attached-document path on `board.class.Board -> cards`, with markdown description support and start/due date, location, archive-state updates, assignee round-tripping through person ids, and status round-tripping through Huly status refs.
+- `board card list` supports status and assignee filtering, `board card create|update` support explicit status ids and assignee person ids, and `board column list` groups current cards by status with friendly status/category names when the referenced model status exists.
 - `drive` supports both workspace drive spaces and lightweight folder/file record CRUD through backend document refs, plus read-only activity history for folder/file doc updates, all smoke-tested live with disposable resources and cleanup.
 - `drive file activity` and `drive folder activity` read attached `activity:class:DocUpdateMessage` entries, which gives a safe verified history surface even though full drive-content/blob workflows are still not implemented.
 - `drive` currently targets backend document refs directly because the drive npm package is not published on npm even though the backend namespace exists and is usable live.

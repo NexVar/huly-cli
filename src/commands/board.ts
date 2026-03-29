@@ -29,6 +29,8 @@ type BoardCardListOptions = {
   board?: string
   status?: string
   withoutStatus?: boolean
+  assignee?: string
+  withoutAssignee?: boolean
   limit?: string
 }
 
@@ -38,6 +40,7 @@ type BoardCardCreateOptions = {
   description?: string
   descriptionFile?: string
   status?: string
+  assignee?: string
   location?: string
   startDate?: string
   dueDate?: string
@@ -50,6 +53,8 @@ type BoardCardUpdateOptions = {
   descriptionFile?: string
   status?: string
   clearStatus?: boolean
+  assignee?: string
+  clearAssignee?: boolean
   location?: string
   noLocation?: boolean
   startDate?: string
@@ -117,9 +122,18 @@ function parseIsoDate(value: string | undefined, flagName: string): string | und
   return value
 }
 
-function resolveNullableValue(value: string | undefined, cleared: boolean | undefined, label: string): string | null | undefined {
+function resolveNullableValue(
+  value: string | undefined,
+  cleared: boolean | undefined,
+  label: string,
+  clearedLabel?: string
+): string | null | undefined {
   if (value !== undefined && cleared) {
-    throw new CliError('VALIDATION_ERROR', 'Use only one of --' + label + ' or --no-' + label + '.', 4)
+    throw new CliError(
+      'VALIDATION_ERROR',
+      'Use only one of --' + label + ' or --' + (clearedLabel ?? ('no-' + label)) + '.',
+      4
+    )
   }
 
   if (cleared) {
@@ -130,7 +144,11 @@ function resolveNullableValue(value: string | undefined, cleared: boolean | unde
 }
 
 function resolveStatusFilter(options: BoardCardListOptions): string | null | undefined {
-  return resolveNullableValue(options.status, options.withoutStatus, 'status')
+  return resolveNullableValue(options.status, options.withoutStatus, 'status', 'without-status')
+}
+
+function resolveAssigneeFilter(options: BoardCardListOptions): string | null | undefined {
+  return resolveNullableValue(options.assignee, options.withoutAssignee, 'assignee', 'without-assignee')
 }
 
 export function registerBoardCommands(program: Command): void {
@@ -214,12 +232,15 @@ export function registerBoardCommands(program: Command): void {
     .option('--board <id>', 'Filter by board id')
     .option('--status <id>', 'Filter by status id')
     .option('--without-status', 'Filter to cards without a status')
+    .option('--assignee <id>', 'Filter by assignee person id')
+    .option('--without-assignee', 'Filter to cards without an assignee')
     .option('--limit <n>', 'Maximum number of board cards')
 
   handleCommand(cardList, async (options: BoardCardListOptions) => {
     return await withClient(async (client) => await listBoardCards(client, {
       boardId: options.board,
       status: resolveStatusFilter(options),
+      assigneeId: resolveAssigneeFilter(options),
       limit: parseLimit(options.limit)
     }))
   })
@@ -239,6 +260,7 @@ export function registerBoardCommands(program: Command): void {
     .option('--description <markdown>', 'Board card description markdown')
     .option('--description-file <path>', 'Read board card description markdown from a file')
     .option('--status <id>', 'Board card status id')
+    .option('--assignee <id>', 'Board card assignee person id')
     .option('--location <text>', 'Board card location')
     .option('--start-date <date>', 'Board card start date in ISO-8601 format')
     .option('--due-date <date>', 'Board card due date in ISO-8601 format')
@@ -252,6 +274,7 @@ export function registerBoardCommands(program: Command): void {
       title: options.title,
       description,
       status: options.status,
+      assigneeId: options.assignee,
       location: options.location,
       startDate: parseIsoDate(options.startDate, '--start-date'),
       dueDate: parseIsoDate(options.dueDate, '--due-date'),
@@ -268,6 +291,8 @@ export function registerBoardCommands(program: Command): void {
     .option('--description-file <path>', 'Read board card description markdown from a file')
     .option('--status <id>', 'Board card status id')
     .option('--clear-status', 'Remove the board card status')
+    .option('--assignee <id>', 'Board card assignee person id')
+    .option('--clear-assignee', 'Remove the board card assignee')
     .option('--location <text>', 'Board card location')
     .option('--no-location', 'Remove the board card location')
     .option('--start-date <date>', 'Board card start date in ISO-8601 format')
@@ -283,7 +308,8 @@ export function registerBoardCommands(program: Command): void {
     return await withClient(async (client) => await updateBoardCard(client, id, {
       title: options.title,
       description,
-      status: resolveNullableValue(options.status, options.clearStatus, 'status'),
+      status: resolveNullableValue(options.status, options.clearStatus, 'status', 'clear-status'),
+      assigneeId: resolveNullableValue(options.assignee, options.clearAssignee, 'assignee', 'clear-assignee'),
       location: resolveNullableValue(options.location, options.noLocation, 'location'),
       startDate: resolveNullableValue(parseIsoDate(options.startDate, '--start-date'), options.noStartDate, 'start-date'),
       dueDate: resolveNullableValue(parseIsoDate(options.dueDate, '--due-date'), options.noDueDate, 'due-date'),
