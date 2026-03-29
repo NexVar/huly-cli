@@ -211,6 +211,7 @@ test('main returns JSON for board card help', async () => {
   assert.ok(payload.data.commands.some((command) => command.name === 'get'))
   assert.ok(payload.data.commands.some((command) => command.name === 'create'))
   assert.ok(payload.data.commands.some((command) => command.name === 'update'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'move'))
   assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
 })
 

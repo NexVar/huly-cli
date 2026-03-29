@@ -2,7 +2,7 @@ import { Command } from 'commander'
 import { handleCommand } from '../lib/command'
 import { withClient } from '../lib/client'
 import { readTextOption } from '../lib/files'
-import { createBoard, createBoardCard, deleteBoard, deleteBoardCard, getBoardCardSummary, getBoardSummary, listBoardCards, listBoardColumns, listBoards, updateBoard, updateBoardCard } from '../lib/huly'
+import { createBoard, createBoardCard, deleteBoard, deleteBoardCard, getBoardCardSummary, getBoardSummary, listBoardCards, listBoardColumns, listBoards, moveBoardCard, updateBoard, updateBoardCard } from '../lib/huly'
 import { CliError } from '../lib/output'
 
 type BoardCreateOptions = {
@@ -63,6 +63,13 @@ type BoardCardUpdateOptions = {
   noDueDate?: boolean
   archive?: boolean
   unarchive?: boolean
+}
+
+type BoardCardMoveOptions = {
+  before?: string
+  after?: string
+  top?: boolean
+  bottom?: boolean
 }
 
 function resolvePrivate(options: Pick<BoardUpdateOptions, 'private' | 'public'>): boolean | undefined {
@@ -149,6 +156,23 @@ function resolveStatusFilter(options: BoardCardListOptions): string | null | und
 
 function resolveAssigneeFilter(options: BoardCardListOptions): string | null | undefined {
   return resolveNullableValue(options.assignee, options.withoutAssignee, 'assignee', 'without-assignee')
+}
+
+function resolveBoardCardMove(options: BoardCardMoveOptions): { beforeId?: string, afterId?: string, top?: boolean, bottom?: boolean } {
+  const selected = [options.before !== undefined, options.after !== undefined, options.top === true, options.bottom === true]
+    .filter(Boolean)
+    .length
+
+  if (selected !== 1) {
+    throw new CliError('VALIDATION_ERROR', 'Provide exactly one of --before, --after, --top, or --bottom.', 4)
+  }
+
+  return {
+    beforeId: options.before,
+    afterId: options.after,
+    top: options.top ? true : undefined,
+    bottom: options.bottom ? true : undefined
+  }
 }
 
 export function registerBoardCommands(program: Command): void {
@@ -315,6 +339,19 @@ export function registerBoardCommands(program: Command): void {
       dueDate: resolveNullableValue(parseIsoDate(options.dueDate, '--due-date'), options.noDueDate, 'due-date'),
       archived: resolveArchived(options)
     }))
+  })
+
+  const cardMove = card
+    .command('move')
+    .description('Move a board card within board order')
+    .argument('<id>', 'Board card id')
+    .option('--before <id>', 'Move before another board card id')
+    .option('--after <id>', 'Move after another board card id')
+    .option('--top', 'Move to the top of the board order')
+    .option('--bottom', 'Move to the bottom of the board order')
+
+  handleCommand(cardMove, async (id: string, options: BoardCardMoveOptions) => {
+    return await withClient(async (client) => await moveBoardCard(client, id, resolveBoardCardMove(options)))
   })
 
   const cardDelete = card

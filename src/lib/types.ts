@@ -369,6 +369,7 @@ export type BoardCardSummary = {
   statusCategoryId: string | null
   statusCategory: string | null
   number: number | null
+  rank: string | null
   assigneeId: string | null
   assigneeName: string | null
   startDate: string | null

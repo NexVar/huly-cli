@@ -36,7 +36,7 @@ Additional implemented commands:
 - `comment list|add`
 - `board list|get|create|update|delete`
 - `board column list`
-- `board card list|get|create|update|delete`
+- `board card list|get|create|update|move|delete`
 - `card types|type list|get|create|update|delete|role list|get|create|update|delete|list|get|create|update|delete`
 - `drive list|get|create|update|delete`
 - `drive folder list|get|create|update|delete|activity`
@@ -93,9 +93,9 @@ Current `issue` scope:
 
 Current `board` / `drive` scope:
 
-- `board` supports list|get|create|update|delete against workspace spaces, `board column list` as a read-only view of live card-status groupings, and `board card list|get|create|update|delete` for board-attached cards.
-- Board-card writes use the verified attached-document path on `board.class.Board -> cards`, with markdown description support and start/due date, location, archive-state updates, assignee round-tripping through person ids, and status round-tripping through Huly status refs.
-- `board card list` supports status and assignee filtering, `board card create|update` support explicit status ids and assignee person ids, and `board column list` groups current cards by status with friendly status/category names when the referenced model status exists.
+- `board` supports list|get|create|update|delete against workspace spaces, `board column list` as a read-only view of live card-status groupings, and `board card list|get|create|update|move|delete` for board-attached cards.
+- Board-card writes use the verified attached-document path on `board.class.Board -> cards`, with markdown description support and start/due date, location, archive-state updates, assignee round-tripping through person ids, status round-tripping through Huly status refs, and explicit rank-based reordering.
+- `board card list` supports status and assignee filtering, returns rank-ordered cards when scoped to a board, `board card create|update` support explicit status ids and assignee person ids, `board card move` supports before/after/top/bottom ordering, and `board column list` groups current cards by status with friendly status/category names when the referenced model status exists.
 - `drive` supports both workspace drive spaces and lightweight folder/file record CRUD through backend document refs, plus read-only activity history for folder/file doc updates, all smoke-tested live with disposable resources and cleanup.
 - `drive file activity` and `drive folder activity` read attached `activity:class:DocUpdateMessage` entries, which gives a safe verified history surface even though full drive-content/blob workflows are still not implemented.
 - `drive` currently targets backend document refs directly because the drive npm package is not published on npm even though the backend namespace exists and is usable live.
@@ -116,7 +116,7 @@ Current `recruit` scope:
 Verification snapshot:
 
 - Local verification: `npm run build`, `npm test`
-- Live verification: built CLI auth via token, board-card CRUD plus status/column flows, drive file activity/history, and recruit candidate/review/opinion CRUD with cleanup
+- Live verification: built CLI auth via token, board-card CRUD plus status/column/assignee/move flows, drive file activity/history, and recruit candidate/review/opinion CRUD with cleanup
 - The README reflects verified commands only. Broader PRD parity work is still in progress.
 
 ## Install
@@ -324,6 +324,8 @@ npm run dev -- board card create \
 npm run dev -- board card list --board <board-id> --status tracker:status:Todo
 npm run dev -- board column list --board <board-id>
 npm run dev -- board card update <card-id> --status tracker:status:Done
+npm run dev -- board card move <card-id> --top
+npm run dev -- board card move <card-id> --after <other-card-id>
 npm run dev -- board card update <card-id> --clear-status
 ```
 

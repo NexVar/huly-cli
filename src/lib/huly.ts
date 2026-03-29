@@ -3705,6 +3705,7 @@ async function mapBoardCardSummaries(
       statusCategoryId,
       statusCategory: statusCategoryId ? statusMetadata.statusCategoryNameById.get(statusCategoryId) ?? statusCategoryId : null,
       number: typeof cardDoc.number === 'number' ? cardDoc.number : null,
+      rank: normalizeUnknownString(cardDoc.rank),
       assigneeId: normalizeUnknownRef(cardDoc.assignee),
       assigneeName: assigneeNames.get(cardDoc.assignee) ?? null,
       startDate: typeof cardDoc.startDate === 'number' && cardDoc.startDate > 0 ? timestampToIso(cardDoc.startDate) : null,
@@ -3806,7 +3807,9 @@ export async function listBoardCards(
 
   const cards = await client.findAll(board.class.Card as any, query as never, {
     limit: options.limit ?? 20,
-    sort: { modifiedOn: SortingOrder.Descending }
+    sort: options.boardId !== undefined
+      ? { rank: SortingOrder.Ascending }
+      : { modifiedOn: SortingOrder.Descending }
   })
 
   return await mapBoardCardSummaries(client, cards, { includeDescription: false })
@@ -3934,6 +3937,89 @@ export async function updateBoardCard(
     }
   }
 
+  return await getBoardCardSummary(client, id)
+}
+
+export async function moveBoardCard(
+  client: HulyClient,
+  id: string,
+  options: {
+    beforeId?: string
+    afterId?: string
+    top?: boolean
+    bottom?: boolean
+  }
+): Promise<BoardCardSummary> {
+  const cardDoc = await getBoardCardById(client, id)
+  const boardId = normalizeUnknownRef(cardDoc.attachedTo)
+
+  if (!boardId) {
+    throw new CliError('VALIDATION_ERROR', "Board card '" + id + "' is not attached to a board", 4)
+  }
+
+  const cards = await client.findAll(board.class.Card as any, { attachedTo: boardId as never }, {
+    limit: 5000,
+    sort: { rank: SortingOrder.Ascending }
+  })
+  const siblings = cards.filter((entry) => entry._id !== cardDoc._id)
+
+  const getRank = (entry: any, label: string): string => {
+    const rank = normalizeUnknownString(entry?.rank)
+    if (!rank) {
+      throw new CliError('VALIDATION_ERROR', label + ' has no rank.', 4)
+    }
+    return rank
+  }
+
+  let nextRank: string
+
+  if (options.beforeId !== undefined) {
+    if (options.beforeId === id) {
+      throw new CliError('VALIDATION_ERROR', 'Use a different board card id for --before.', 4)
+    }
+
+    const target = await getBoardCardById(client, options.beforeId)
+    if (normalizeUnknownRef(target.attachedTo) !== boardId) {
+      throw new CliError('VALIDATION_ERROR', 'The --before card must belong to the same board.', 4)
+    }
+
+    const targetIndex = siblings.findIndex((entry) => entry._id === target._id)
+    if (targetIndex === -1) {
+      throw new CliError('VALIDATION_ERROR', 'The --before card is outside the current board ordering window.', 4)
+    }
+
+    const previous = targetIndex > 0 ? siblings[targetIndex - 1] : undefined
+    nextRank = makeRank(previous ? getRank(previous, 'The previous board card') : undefined, getRank(target, 'The --before board card'))
+  } else if (options.afterId !== undefined) {
+    if (options.afterId === id) {
+      throw new CliError('VALIDATION_ERROR', 'Use a different board card id for --after.', 4)
+    }
+
+    const target = await getBoardCardById(client, options.afterId)
+    if (normalizeUnknownRef(target.attachedTo) !== boardId) {
+      throw new CliError('VALIDATION_ERROR', 'The --after card must belong to the same board.', 4)
+    }
+
+    const targetIndex = siblings.findIndex((entry) => entry._id === target._id)
+    if (targetIndex === -1) {
+      throw new CliError('VALIDATION_ERROR', 'The --after card is outside the current board ordering window.', 4)
+    }
+
+    const next = targetIndex < siblings.length - 1 ? siblings[targetIndex + 1] : undefined
+    nextRank = makeRank(getRank(target, 'The --after board card'), next ? getRank(next, 'The next board card') : undefined)
+  } else if (options.top) {
+    nextRank = siblings.length === 0
+      ? makeRank(undefined, undefined)
+      : makeRank(undefined, getRank(siblings[0], 'The top board card'))
+  } else if (options.bottom) {
+    nextRank = siblings.length === 0
+      ? makeRank(undefined, undefined)
+      : makeRank(getRank(siblings[siblings.length - 1], 'The bottom board card'), undefined)
+  } else {
+    throw new CliError('VALIDATION_ERROR', 'Provide a move target.', 4)
+  }
+
+  await client.updateDoc(board.class.Card as any, core.space.Space, cardDoc._id, { rank: nextRank } as never)
   return await getBoardCardSummary(client, id)
 }
 
