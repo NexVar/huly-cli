@@ -4,18 +4,25 @@ import { withClient } from '../lib/client'
 import { readTextOption } from '../lib/files'
 import {
   addChatMembers,
+  createDirectChat,
   createChatChannel,
   createChatMessage,
+  createThreadMessage,
   deleteChatChannel,
   deleteChatMessage,
+  deleteThreadMessage,
+  getDirectChatSummary,
   getChatMessageSummary,
   getChatSpaceSummary,
+  getThreadMessageSummary,
   listChatMembers,
   listChatMessages,
   listChatSpaces,
+  listThreadMessages,
   removeChatMembers,
   updateChatChannel,
-  updateChatMessage
+  updateChatMessage,
+  updateThreadMessage
 } from '../lib/huly'
 import { CliError } from '../lib/output'
 
@@ -58,8 +65,26 @@ type ChatMessageUpdateOptions = {
   messageFile?: string
 }
 
+type ChatThreadListOptions = {
+  limit?: string
+}
+
+type ChatThreadCreateOptions = {
+  message?: string
+  messageFile?: string
+}
+
+type ChatThreadUpdateOptions = {
+  message?: string
+  messageFile?: string
+}
+
 type ChatMemberMutateOptions = {
   member: string[]
+}
+
+type ChatDirectOptions = {
+  member: string
 }
 
 function parseLimit(limit: string | undefined): number | undefined {
@@ -220,6 +245,26 @@ export function registerChatCommands(program: Command): void {
     return await withClient(async (client) => await removeChatMembers(client, id, options.member))
   })
 
+  const direct = chat.command('direct').description('Direct-message chat commands')
+
+  const directGet = direct
+    .command('get')
+    .description('Get an existing direct-message chat by member email')
+    .requiredOption('--member <email>', 'Workspace member email')
+
+  handleCommand(directGet, async (options: ChatDirectOptions) => {
+    return await withClient(async (client) => await getDirectChatSummary(client, options.member))
+  })
+
+  const directCreate = direct
+    .command('create')
+    .description('Create or return a direct-message chat by member email')
+    .requiredOption('--member <email>', 'Workspace member email')
+
+  handleCommand(directCreate, async (options: ChatDirectOptions) => {
+    return await withClient(async (client) => await createDirectChat(client, options.member))
+  })
+
   const message = chat.command('message').description('Chat message commands')
 
   const messageList = message
@@ -283,4 +328,68 @@ export function registerChatCommands(program: Command): void {
     .argument('<id>', 'Chat message id')
 
   handleCommand(messageDelete, async (id: string) => await withClient(async (client) => await deleteChatMessage(client, id)))
+
+  const thread = chat.command('thread').description('Chat thread reply commands')
+
+  const threadList = thread
+    .command('list')
+    .description('List thread replies on a chat message')
+    .argument('<message-id>', 'Parent chat message id')
+    .option('--limit <n>', 'Maximum number of thread replies')
+
+  handleCommand(threadList, async (messageId: string, options: ChatThreadListOptions) => {
+    return await withClient(async (client) => await listThreadMessages(client, {
+      parentMessageId: messageId,
+      limit: parseLimit(options.limit)
+    }))
+  })
+
+  const threadGet = thread
+    .command('get')
+    .description('Get one thread reply by id')
+    .argument('<id>', 'Thread reply id')
+
+  handleCommand(threadGet, async (id: string) => await withClient(async (client) => await getThreadMessageSummary(client, id)))
+
+  const threadSend = thread
+    .command('send')
+    .description('Send a thread reply to a chat message')
+    .argument('<message-id>', 'Parent chat message id')
+    .option('--message <text>', 'Reply markdown')
+    .option('--message-file <path>', 'Read reply markdown from a file')
+
+  handleCommand(threadSend, async (messageId: string, options: ChatThreadCreateOptions) => {
+    const messageText = await readTextOption(options.message, options.messageFile, 'message')
+
+    if (messageText === undefined) {
+      throw new CliError('VALIDATION_ERROR', 'Either --message or --message-file is required.', 4)
+    }
+
+    return await withClient(async (client) => await createThreadMessage(client, {
+      parentMessageId: messageId,
+      message: messageText
+    }))
+  })
+
+  const threadUpdate = thread
+    .command('update')
+    .description('Update an existing thread reply')
+    .argument('<id>', 'Thread reply id')
+    .option('--message <text>', 'Reply markdown')
+    .option('--message-file <path>', 'Read reply markdown from a file')
+
+  handleCommand(threadUpdate, async (id: string, options: ChatThreadUpdateOptions) => {
+    const messageText = await readTextOption(options.message, options.messageFile, 'message')
+
+    return await withClient(async (client) => await updateThreadMessage(client, id, {
+      message: messageText
+    }))
+  })
+
+  const threadDelete = thread
+    .command('delete')
+    .description('Delete a thread reply')
+    .argument('<id>', 'Thread reply id')
+
+  handleCommand(threadDelete, async (id: string) => await withClient(async (client) => await deleteThreadMessage(client, id)))
 }

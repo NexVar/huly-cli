@@ -35,10 +35,12 @@
   },
   "dependencies": {
     "@hcengineering/api-client": "^0.7.19",
+    "@hcengineering/board": "^0.7.0",
     "@hcengineering/collaborator-client": "^0.7.18",
     "@hcengineering/contact": "^0.7.0",
     "@hcengineering/core": "^0.7.26",
     "@hcengineering/document": "^0.7.0",
+    "@hcengineering/hr": "^0.7.0",
     "@hcengineering/notification": "^0.7.0",
     "@hcengineering/rank": "^0.7.0",
     "@hcengineering/tags": "^0.7.0",

@@ -5,7 +5,10 @@ import {
   loadServerConfig,
   MarkupContent
 } from '@hcengineering/api-client'
-import { generateId, type Account, type Class, type Doc, type FindOptions, type FindResult, type ModelDb, type Ref, type WithLookup, type TxResult, type Space, type Data, type DocumentUpdate, type AttachedDoc, type AttachedData, type Hierarchy, type TxOperations } from '@hcengineering/core'
+import { getClient as getCollaboratorClient } from '@hcengineering/collaborator-client'
+import { generateId, makeCollabId, type Account, type Class, type Doc, type FindOptions, type FindResult, type ModelDb, type Ref, type WithLookup, type TxResult, type Space, type Data, type DocumentUpdate, type AttachedDoc, type AttachedData, type Hierarchy, type TxOperations } from '@hcengineering/core'
+import { htmlToJSON, jsonToMarkup } from '@hcengineering/text'
+import { markdownToMarkup } from '@hcengineering/text-markdown'
 import { resolveAuthConfig } from './config'
 import { createMarkupOperations } from './markup'
 import { CliError } from './output'
@@ -117,6 +120,11 @@ async function connectClientOnce(resolvedConfig: AuthConfig): Promise<{ client: 
     workspaceToken.token,
     serverConfig
   )
+  const collaborator = getCollaboratorClient(
+    workspaceToken.workspaceId,
+    workspaceToken.token,
+    serverConfig.COLLABORATOR_URL
+  )
   const restClient = createRestClient(
     workspaceToken.endpoint,
     workspaceToken.workspaceId,
@@ -134,7 +142,20 @@ async function connectClientOnce(resolvedConfig: AuthConfig): Promise<{ client: 
     return await txOpsPromise
   }
 
-  const processMarkup = async <T extends Record<string, unknown>>(
+  const toMarkupString = (value: MarkupContent): string => {
+    switch (value.kind) {
+      case 'markup':
+        return value.content
+      case 'html':
+        return jsonToMarkup(htmlToJSON(value.content))
+      case 'markdown':
+        return jsonToMarkup(markdownToMarkup(value.content))
+      default:
+        throw new Error(`Unsupported markup format: ${String(value.kind)}`)
+    }
+  }
+
+  const processCreateMarkup = async <T extends Record<string, unknown>>(
     objectClass: Ref<Class<Doc>>,
     objectId: Ref<Doc>,
     data: T
@@ -144,6 +165,37 @@ async function connectClientOnce(resolvedConfig: AuthConfig): Promise<{ client: 
     for (const [key, value] of Object.entries(data)) {
       if (value instanceof MarkupContent) {
         result[key] = await markupOps.uploadMarkup(objectClass, objectId, key, value.content, value.kind)
+      } else {
+        result[key] = value
+      }
+    }
+
+    return result as T
+  }
+
+  const processUpdateMarkup = async <T extends Record<string, unknown>>(
+    objectClass: Ref<Class<Doc>>,
+    objectId: Ref<Doc>,
+    data: T
+  ): Promise<T> => {
+    const entries = Object.entries(data)
+    const hasMarkup = entries.some(([, value]) => value instanceof MarkupContent)
+
+    if (!hasMarkup) {
+      return data
+    }
+
+    const existingDoc = await restClient.findOne(objectClass, { _id: objectId as never }) as Record<string, unknown> | undefined
+    const result: Record<string, unknown> = {}
+
+    for (const [key, value] of entries) {
+      if (value instanceof MarkupContent) {
+        await collaborator.updateMarkup(makeCollabId(objectClass, objectId, key), toMarkupString(value))
+        const currentRef = typeof existingDoc?.[key] === 'string' && existingDoc[key] !== ''
+          ? existingDoc[key] as string
+          : null
+
+        result[key] = currentRef ?? await markupOps.uploadMarkup(objectClass, objectId, key, value.content, value.kind)
       } else {
         result[key] = value
       }
@@ -164,11 +216,11 @@ async function connectClientOnce(resolvedConfig: AuthConfig): Promise<{ client: 
     findOne: async (...args) => await restClient.findOne(...args),
     createDoc: async (_class, space, attributes, id) => {
       const docId = id ?? generateId()
-      const processedAttributes = await processMarkup(_class as Ref<Class<Doc>>, docId as Ref<Doc>, attributes as Record<string, unknown>)
+      const processedAttributes = await processCreateMarkup(_class as Ref<Class<Doc>>, docId as Ref<Doc>, attributes as Record<string, unknown>)
       return await (await getTxOps()).createDoc(_class, space, processedAttributes as Data<any>, docId)
     },
     updateDoc: async (_class, space, objectId, operations, retrieve) => {
-      const processedOperations = await processMarkup(
+      const processedOperations = await processUpdateMarkup(
         _class as Ref<Class<Doc>>,
         objectId as Ref<Doc>,
         operations as Record<string, unknown>
@@ -178,7 +230,7 @@ async function connectClientOnce(resolvedConfig: AuthConfig): Promise<{ client: 
     removeDoc: async (...args) => await (await getTxOps()).removeDoc(...args),
     addCollection: async (_class, space, attachedTo, attachedToClass, collection, attributes, id) => {
       const docId = id ?? generateId()
-      const processedAttributes = await processMarkup(_class as Ref<Class<Doc>>, docId as Ref<Doc>, attributes as Record<string, unknown>)
+      const processedAttributes = await processCreateMarkup(_class as Ref<Class<Doc>>, docId as Ref<Doc>, attributes as Record<string, unknown>)
       return await (await getTxOps()).addCollection(
         _class,
         space,

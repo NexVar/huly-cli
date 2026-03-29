@@ -17,7 +17,7 @@ Current Phase 1 commands:
 
 - `auth login|status|logout`
 - `project list|get`
-- `issue list|get|create|update|delete`
+- `issue list|get|create|update|delete|template list|get|relation add|relation remove|blocker add|blocker remove`
 - `member list|me`
 
 Additional implemented commands:
@@ -29,43 +29,92 @@ Additional implemented commands:
 - `label list|create|assign`
 - `component list|create`
 - `chat list|get|create|update|delete`
+- `chat direct get|create`
 - `chat member list|add|remove`
 - `chat message list|get|send|update|delete`
+- `chat thread list|get|send|update|delete`
 - `comment list|add`
+- `board list|get|create|update|delete`
+- `board card list|get|create|update|delete`
 - `card types|type list|get|create|update|delete|role list|get|create|update|delete|list|get|create|update|delete`
+- `drive list|get|create|update|delete`
+- `drive folder list|get|create|update|delete`
+- `drive file list|get|create|update|delete`
+- `hr department list|get|create|update|delete`
+- `hr employee list|get`
+- `hr public-holiday list|get|create|update|delete`
+- `hr request-type list`
+- `hr request list|get|create|update|delete`
 - `notification list|get|read|unread|archive|unarchive`
+- `recruit vacancy list|get|create|update|delete`
+- `recruit applicant-status list`
+- `recruit applicant list|get|create|update|delete`
+- `recruit candidate list|get|create|update|delete`
+- `recruit review list|get|create|update|delete`
+- `recruit opinion list|get|create|update|delete`
 - `time list|get|create|update|done|open|delete`
-- `time report list|get|create|update|delete`
+- `time report list|get|totals|create|update|delete`
 - `setup-skill`
 
 Current scope details:
 
-- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `card`, `chat`, `notification`, `time`, `setup-skill`
-- Not implemented yet: remaining Phase 5 modules such as `hr`, `board`, `drive`, `recruit`
+- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `board`, `card`, `chat`, `drive`, `hr`, `notification`, `recruit`, `time`, `setup-skill`
+- Remaining parity gaps are now narrower and mostly around deeper entity coverage inside the newly added Phase 5 modules, not complete absence of those namespaces.
 
 Current `time` scope:
 
 - `time` currently manages issue-attached todos plus issue-attached `TimeSpendReport` entries through Huly's published time and tracker packages.
-- Time-report CRUD is implemented and intended for automation-friendly logging against tracker issues.
-- Broader logged-time/reporting coverage from the long-term PRD, such as aggregated report views, is still pending.
+- Time-report CRUD plus `time report totals` are implemented and intended for automation-friendly logging and rollups against tracker issues.
+- The current totals view returns overall hours plus issue and employee groupings from the matching report set.
+- Broader logged-time/reporting coverage from the long-term PRD, such as richer reporting breakdowns, is still pending.
 
 Current `card` scope:
 
 - `card` currently manages cards in Huly's default card space, custom card type CRUD, and attached role CRUD for workspace-defined types.
 - Built-in card types remain readable but intentionally read-only. Custom `card type` and `card role` writes are smoke-tested live.
+- Custom `card type create|update` now support `color`, `background`, and `removed` metadata on workspace-defined types.
 - The smoke-tested card create/update/delete path still uses the generic `Card` type. Other workspace-specific card types are discoverable and targetable, but some may have stricter backend behavior.
 - Broader card-schema work from the long-term PRD, such as arbitrary attributes and richer relation semantics, is still pending.
 
 Current `chat` scope:
 
-- `chat` currently manages chat channels, channel membership updates, and chat messages attached to channels or direct-message chats by id.
+- `chat` currently manages chat channels, direct-message lookup/creation, channel membership updates, chat messages, and thread replies attached to chat messages.
 - Channel CRUD is smoke-tested. Channel member list/add/remove is smoke-tested live with disposable channels. Message create and delete are smoke-tested. Message updates use bounded settle polling before returning, but fresh `chat message get` reads can still lag after an update on the Huly backend.
-- Deeper chat coverage from the long-term PRD, such as richer thread handling and direct-message lifecycle workflows, is still pending.
+- Direct-message lookup/creation by member email is smoke-tested live. Thread reply list|get|send|update|delete is also smoke-tested live against disposable channels. Deeper chat coverage from the long-term PRD, such as richer nested-thread behavior, is still pending.
 
 Current `issue` scope:
 
 - `issue` now surfaces `estimation`, `remainingTime`, and `reportedTime` in issue output, and supports `--estimation` / `--remaining-time` on `issue create` and `issue update`.
+- `issue list` now supports repeated `--status` filters plus `--date-from` / `--date-to` due-date filtering for broader tracker automation.
 - Live smoke confirmed these fields round-trip, but Huly recalculates `remainingTime` when `estimation` changes. The CLI reports the backend result rather than pretending independent control over both fields.
+- `issue` also surfaces relation/blocker ids and identifiers, derived child/template metadata, and supports `issue relation add|remove` plus `issue blocker add|remove`.
+- `issue template list|get` is implemented for published tracker templates. Live reads against the current workspace returned empty lists, so template `get` remains verified only at the code-path level until real template data exists.
+
+Current `board` / `drive` scope:
+
+- `board` supports list|get|create|update|delete against workspace spaces, plus `board card list|get|create|update|delete` for board-attached cards.
+- Board-card writes use the verified attached-document path on `board.class.Board -> cards`, with markdown description support and start/due date, location, and archive-state updates.
+- `drive` supports both workspace drive spaces and lightweight folder/file record CRUD through backend document refs, all smoke-tested live with disposable resources and cleanup.
+- `drive` currently targets backend document refs directly because the drive npm package is not published on npm even though the backend namespace exists and is usable live.
+
+Current `hr` scope:
+
+- `hr` currently supports department CRUD, employee list|get, public-holiday CRUD, request-type list, and request list|get|create|update|delete.
+- Public holiday CRUD uses the published HR package model in `core:space:Workspace`; create defaults to `hr:ids:Head` when `--department` is omitted. Request creation uses the correct attached-doc path and defaults to the current authenticated member when `--employee` is omitted.
+- These flows were smoke-tested live against the current workspace, including request type resolution and cleanup.
+
+Current `recruit` scope:
+
+- `recruit` currently supports vacancy CRUD, applicant-status list, applicant list|get|create|update|delete, candidate list|get|create|update|delete, review list|get|create|update|delete, and opinion list|get|create|update|delete.
+- Vacancy, applicant, review, and opinion writes use backend-validated payload shapes discovered through live smoke rather than guessed package-level abstractions. Review creation follows Huly's calendar-event payload requirements, and opinion CRUD uses the verified `Review -> opinions` attached collection path.
+- Applicant statuses are resolved from the published recruit task type instead of hard-coded display labels. Candidate CRUD is implemented by creating/updating contact persons with the recruit candidate mixin.
+- Review and opinion descriptions use the shared markup update path that was already fixed for other markdown-backed entities, so description create/update round-trips are verified live.
+
+Verification snapshot:
+
+- Local verification: `npm run build`, `npm test`
+- Live verification: built CLI auth via token, board-card CRUD, and recruit candidate/review/opinion CRUD with cleanup
+- The README reflects verified commands only. Broader PRD parity work is still in progress.
 
 ## Install
 
@@ -162,6 +211,7 @@ npm run dev -- component list --project WEBSI
 npm run dev -- chat list --include-direct --limit 10
 npm run dev -- chat member list <chat-id>
 npm run dev -- comment list --on WEBSI-123
+npm run dev -- board card list --limit 10
 npm run dev -- card list --type Card --limit 10
 npm run dev -- notification list --unread --active
 npm run dev -- time list --issue HULY-1
@@ -174,6 +224,7 @@ Using the built binary:
 node dist/bin/huly.js auth status
 node dist/bin/huly.js project get HULY
 node dist/bin/huly.js issue get HULY-1
+node dist/bin/huly.js board card list --limit 10
 node dist/bin/huly.js teamspace list
 node dist/bin/huly.js person list
 node dist/bin/huly.js milestone list --project WEBSI
@@ -230,6 +281,12 @@ npm run dev -- issue update WEBSI-123 --estimation 6
 npm run dev -- issue update WEBSI-123 --remaining-time 1.5
 ```
 
+List issue templates:
+
+```bash
+npm run dev -- issue template list --project WEBSI --limit 10
+```
+
 Create and complete an issue todo:
 
 ```bash
@@ -250,6 +307,7 @@ npm run dev -- time report create \
   --description "Investigated and fixed the CLI path"
 
 npm run dev -- time report update <report-id> --value 2 --description "Included verification"
+npm run dev -- time report totals --issue HULY-1
 ```
 
 Create a card:
@@ -274,7 +332,9 @@ Create a custom card type and role:
 ```bash
 npm run dev -- card type create \
   --label "CLI Smoke Type" \
-  --extends Card
+  --extends Card \
+  --color 11 \
+  --background 22
 
 npm run dev -- card role create \
   --type <type-id> \
@@ -291,6 +351,20 @@ npm run dev -- chat create \
 npm run dev -- chat message send \
   --chat <chat-id> \
   --message "Hello from huly-cli"
+```
+
+Create or fetch a direct-message chat:
+
+```bash
+npm run dev -- chat direct create --member teammate@example.com
+npm run dev -- chat direct get --member teammate@example.com
+```
+
+Reply in a chat thread:
+
+```bash
+npm run dev -- chat thread send <message-id> --message "Thread reply"
+npm run dev -- chat thread list <message-id>
 ```
 
 Create a document:

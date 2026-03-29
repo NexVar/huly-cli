@@ -72,6 +72,46 @@ export type IssueSummary = {
   labels: string[]
   parentId: string | null
   parentIdentifier: string | null
+  blockerIds: string[]
+  blockerIdentifiers: string[]
+  relationIds: string[]
+  relationIdentifiers: string[]
+  subIssueCount: number
+  childEstimation: number
+  childReportedTime: number
+  templateId: string | null
+  templateChildId: string | null
+}
+
+export type IssueTemplateSummary = {
+  id: string
+  title: string
+  description: string | null
+  priority: string | number
+  assignee: string | null
+  assigneeEmail: string | null
+  assigneeId: string | null
+  component: string | null
+  componentId: string | null
+  milestone: string | null
+  milestoneId: string | null
+  project: string | null
+  estimation: number
+  labels: string[]
+  relationIds: string[]
+  childCount: number
+  children: Array<{
+    id: string
+    title: string
+    priority: string | number
+    estimation: number
+    milestoneId: string | null
+    componentId: string | null
+    assigneeId: string | null
+    labelIds: string[]
+  }>
+  createdOn: string | null
+  modifiedOn: string | null
 }
 
 export type MemberSummary = {
@@ -193,6 +233,30 @@ export type TimeReportSummary = {
   modifiedOn: string | null
 }
 
+export type TimeReportTotalsSummary = {
+  reportCount: number
+  totalValue: number
+  filters: {
+    issue: string | null
+    assignee: string | null
+    dateFrom: string | null
+    dateTo: string | null
+  }
+  byIssue: Array<{
+    issue: string | null
+    issueId: string | null
+    reportCount: number
+    totalValue: number
+  }>
+  byEmployee: Array<{
+    employee: string | null
+    employeeEmail: string | null
+    employeeId: string | null
+    reportCount: number
+    totalValue: number
+  }>
+}
+
 export type CardTypeSummary = {
   id: string
   label: string
@@ -227,6 +291,7 @@ export type CardSummary = {
   parentTitle: string | null
   children: number | null
   attachments: number | null
+  readonly: boolean | null
   rank: string | null
   createdOn: string | null
   modifiedOn: string | null
@@ -266,4 +331,204 @@ export type ChatMessageSummary = {
   createdOn: string | null
   modifiedOn: string | null
   editedOn: string | null
+}
+
+export type ChatThreadSummary = {
+  id: string
+  parentMessageId: string
+  chatId: string
+  chatKind: 'channel' | 'direct'
+  chatName: string | null
+  message: string
+  author: string
+  authorId: string
+  createdOn: string | null
+  modifiedOn: string | null
+  editedOn: string | null
+}
+
+export type BoardSummary = {
+  id: string
+  name: string
+  description: string | null
+  private: boolean
+  archived: boolean
+  type: string | null
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type BoardCardSummary = {
+  id: string
+  boardId: string
+  boardName: string | null
+  title: string
+  description: string | null
+  status: string | null
+  number: number | null
+  assigneeId: string | null
+  assigneeName: string | null
+  startDate: string | null
+  dueDate: string | null
+  location: string | null
+  archived: boolean
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type DriveSummary = {
+  id: string
+  name: string
+  description: string | null
+  private: boolean
+  archived: boolean
+  type: string | null
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type DriveResourceSummary = {
+  id: string
+  class: 'folder' | 'file'
+  title: string | null
+  name: string | null
+  docUpdateMessages: number | null
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type HrDepartmentSummary = {
+  id: string
+  name: string
+  description: string | null
+  parentId: string | null
+  parentName: string | null
+  teamLeadId: string | null
+  teamLeadName: string | null
+  memberIds: string[]
+  managerIds: string[]
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type HrEmployeeSummary = {
+  id: string
+  name: string
+  email: string | null
+  departmentId: string | null
+  departmentName: string | null
+  active: boolean | null
+  role: string | null
+  personUuid: string | null
+}
+
+export type HrRequestTypeSummary = {
+  id: string
+  label: string
+  value: number | null
+  color: number | null
+}
+
+export type HrRequestSummary = {
+  id: string
+  employeeId: string | null
+  employeeName: string | null
+  departmentId: string | null
+  departmentName: string | null
+  typeId: string | null
+  typeLabel: string | null
+  description: string | null
+  date: string | null
+  dueDate: string | null
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type HrPublicHolidaySummary = {
+  id: string
+  title: string
+  description: string | null
+  date: string | null
+  departmentId: string | null
+  departmentName: string | null
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type RecruitVacancySummary = {
+  id: string
+  name: string
+  description: string | null
+  fullDescription: string | null
+  location: string | null
+  dueDate: string | null
+  private: boolean
+  archived: boolean
+  type: string | null
+  applicantCount: number
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type RecruitApplicantSummary = {
+  id: string
+  vacancyId: string | null
+  vacancyName: string | null
+  identifier: string | null
+  number: number | null
+  status: string | null
+  assigneeId: string | null
+  assigneeName: string | null
+  startDate: string | null
+  dueDate: string | null
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type RecruitApplicantStatusSummary = {
+  id: string
+  name: string
+  color: number | null
+}
+
+export type RecruitCandidateSummary = {
+  id: string
+  name: string
+  city: string | null
+  title: string | null
+  source: string | null
+  remote: boolean | null
+  onsite: boolean | null
+  applications: number | null
+  reviews: number | null
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type RecruitReviewSummary = {
+  id: string
+  candidateId: string | null
+  candidateName: string | null
+  title: string
+  description: string | null
+  verdict: string | null
+  applicantId: string | null
+  location: string | null
+  date: string | null
+  dueDate: string | null
+  allDay: boolean
+  opinionCount: number | null
+  createdOn: string | null
+  modifiedOn: string | null
+}
+
+export type RecruitOpinionSummary = {
+  id: string
+  reviewId: string | null
+  reviewTitle: string | null
+  value: string | null
+  description: string | null
+  number: number | null
+  createdOn: string | null
+  modifiedOn: string | null
 }

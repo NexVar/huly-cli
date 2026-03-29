@@ -2,14 +2,16 @@ import { Command } from 'commander'
 import { handleCommand } from '../lib/command'
 import { withClient } from '../lib/client'
 import { readTextOption } from '../lib/files'
-import { createIssue, deleteIssue, getIssueSummary, listIssues, updateIssue } from '../lib/huly'
+import { addIssueBlockers, addIssueRelations, createIssue, deleteIssue, getIssueSummary, getIssueTemplateSummary, listIssueTemplates, listIssues, removeIssueBlockers, removeIssueRelations, updateIssue } from '../lib/huly'
 import { CliError } from '../lib/output'
 
 type IssueListOptions = {
   project: string
-  status?: string
+  status: string[]
   assignee?: string
   priority?: string
+  dateFrom?: string
+  dateTo?: string
   limit?: string
   sort?: string
 }
@@ -39,6 +41,19 @@ type IssueUpdateOptions = {
   milestone?: string
   estimation?: string
   remainingTime?: string
+}
+
+type IssueRelationMutateOptions = {
+  related: string[]
+}
+
+type IssueBlockerMutateOptions = {
+  blockedBy: string[]
+}
+
+type IssueTemplateListOptions = {
+  project: string
+  limit?: string
 }
 
 function parseLimit(limit: string | undefined): number | undefined {
@@ -85,6 +100,23 @@ function parseHours(value: string | undefined, flagName: string): number | undef
   return parsed
 }
 
+function collectValues(value: string, previous: string[] = []): string[] {
+  previous.push(value)
+  return previous
+}
+
+function parseIsoDate(value: string | undefined, flagName: string): string | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+
+  if (Number.isNaN(new Date(value).getTime())) {
+    throw new CliError('VALIDATION_ERROR', `Invalid ${flagName} value: ${value}`, 4)
+  }
+
+  return value
+}
+
 export function registerIssueCommands(program: Command): void {
   const issue = program.command('issue').description('Issue commands')
 
@@ -92,9 +124,11 @@ export function registerIssueCommands(program: Command): void {
     .command('list')
     .description('List issues in a project')
     .requiredOption('--project <identifier>', 'Project identifier')
-    .option('--status <status>', 'Status name')
+    .option('--status <status>', 'Status name; may be repeated', collectValues, [])
     .option('--assignee <email>', 'Assignee email')
     .option('--priority <priority>', 'Issue priority')
+    .option('--date-from <date>', 'Only include issues due on or after this ISO-8601 date')
+    .option('--date-to <date>', 'Only include issues due on or before this ISO-8601 date')
     .option('--limit <n>', 'Maximum number of issues')
     .option('--sort <field>', 'Sort field; prefix with - for descending')
 
@@ -102,9 +136,11 @@ export function registerIssueCommands(program: Command): void {
     const limit = parseLimit(options.limit)
     return await withClient(async (client) => await listIssues(client, {
       projectIdentifier: options.project,
-      status: options.status,
+      statuses: options.status,
       assignee: options.assignee,
       priority: options.priority,
+      dateFrom: parseIsoDate(options.dateFrom, '--date-from'),
+      dateTo: parseIsoDate(options.dateTo, '--date-to'),
       limit,
       sort: options.sort
     }))
@@ -187,4 +223,86 @@ export function registerIssueCommands(program: Command): void {
     .argument('<identifier>', 'Issue identifier')
 
   handleCommand(remove, async (identifier: string) => await withClient(async (client) => await deleteIssue(client, identifier)))
+
+  const template = issue.command('template').description('Issue template commands')
+
+  const templateList = template
+    .command('list')
+    .description('List issue templates in a project')
+    .requiredOption('--project <identifier>', 'Project identifier')
+    .option('--limit <n>', 'Maximum number of templates')
+
+  handleCommand(templateList, async (options: IssueTemplateListOptions) => {
+    return await withClient(async (client) => await listIssueTemplates(client, {
+      projectIdentifier: options.project,
+      limit: parseLimit(options.limit)
+    }))
+  })
+
+  const templateGet = template
+    .command('get')
+    .description('Get one issue template by id')
+    .argument('<id>', 'Issue template id')
+
+  handleCommand(templateGet, async (id: string) => await withClient(async (client) => await getIssueTemplateSummary(client, id)))
+
+  const relation = issue.command('relation').description('Issue relation commands')
+
+  const relationAdd = relation
+    .command('add')
+    .description('Add related issues')
+    .argument('<identifier>', 'Issue identifier')
+    .option('--related <identifier>', 'Related issue identifier; may be repeated', collectValues, [])
+
+  handleCommand(relationAdd, async (identifier: string, options: IssueRelationMutateOptions) => {
+    if (options.related.length === 0) {
+      throw new CliError('VALIDATION_ERROR', 'At least one --related value is required.', 4)
+    }
+
+    return await withClient(async (client) => await addIssueRelations(client, identifier, options.related))
+  })
+
+  const relationRemove = relation
+    .command('remove')
+    .description('Remove related issues')
+    .argument('<identifier>', 'Issue identifier')
+    .option('--related <identifier>', 'Related issue identifier; may be repeated', collectValues, [])
+
+  handleCommand(relationRemove, async (identifier: string, options: IssueRelationMutateOptions) => {
+    if (options.related.length === 0) {
+      throw new CliError('VALIDATION_ERROR', 'At least one --related value is required.', 4)
+    }
+
+    return await withClient(async (client) => await removeIssueRelations(client, identifier, options.related))
+  })
+
+  const blocker = issue.command('blocker').description('Issue blocker commands')
+
+  const blockerAdd = blocker
+    .command('add')
+    .description('Add blocking issues')
+    .argument('<identifier>', 'Issue identifier')
+    .option('--blocked-by <identifier>', 'Blocking issue identifier; may be repeated', collectValues, [])
+
+  handleCommand(blockerAdd, async (identifier: string, options: IssueBlockerMutateOptions) => {
+    if (options.blockedBy.length === 0) {
+      throw new CliError('VALIDATION_ERROR', 'At least one --blocked-by value is required.', 4)
+    }
+
+    return await withClient(async (client) => await addIssueBlockers(client, identifier, options.blockedBy))
+  })
+
+  const blockerRemove = blocker
+    .command('remove')
+    .description('Remove blocking issues')
+    .argument('<identifier>', 'Issue identifier')
+    .option('--blocked-by <identifier>', 'Blocking issue identifier; may be repeated', collectValues, [])
+
+  handleCommand(blockerRemove, async (identifier: string, options: IssueBlockerMutateOptions) => {
+    if (options.blockedBy.length === 0) {
+      throw new CliError('VALIDATION_ERROR', 'At least one --blocked-by value is required.', 4)
+    }
+
+    return await withClient(async (client) => await removeIssueBlockers(client, identifier, options.blockedBy))
+  })
 }

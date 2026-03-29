@@ -1,9 +1,11 @@
 import { markdown } from '@hcengineering/api-client'
+import board from '@hcengineering/board'
 import card, { type Card as HulyCard, type CardSpace, type MasterTag, type Role as CardRole } from '@hcengineering/card'
-import chunter, { type Channel as HulyChatChannel, type ChatMessage, type DirectMessage as HulyDirectMessage } from '@hcengineering/chunter'
+import chunter, { type Channel as HulyChatChannel, type ChatMessage, type DirectMessage as HulyDirectMessage, type ThreadMessage as HulyThreadMessage } from '@hcengineering/chunter'
 import contact, { AvatarType, getPersonBySocialKey, type Person as HulyPerson } from '@hcengineering/contact'
-import core, { SocialIdType, SortingOrder, buildSocialIdString, generateId, type Class, type Doc, type Ref, type Space, type Status } from '@hcengineering/core'
+import core, { SocialIdType, SortingOrder, buildSocialIdString, generateId, type Class, type Doc, type Ref, type RelatedDocument, type Space, type Status } from '@hcengineering/core'
 import document, { getFirstRank, type Document as HulyDocument, type Teamspace } from '@hcengineering/document'
+import hr, { fromTzDate, toTzDate } from '@hcengineering/hr'
 import notification, { type InboxNotification } from '@hcengineering/notification'
 import { makeRank } from '@hcengineering/rank'
 import task from '@hcengineering/task'
@@ -11,10 +13,14 @@ import tags, { type TagElement, type TagReference } from '@hcengineering/tags'
 import { jsonToMarkup, markupToJSON } from '@hcengineering/text'
 import { markdownToMarkup, markupToMarkdown } from '@hcengineering/text-markdown'
 import time, { ToDoPriority, type ToDo } from '@hcengineering/time'
-import tracker, { IssuePriority, MilestoneStatus, type Component, type Issue, type Milestone, type Project, type TimeSpendReport } from '@hcengineering/tracker'
+import tracker, { IssuePriority, MilestoneStatus, type Component, type Issue, type IssueTemplate, type Milestone, type Project, type TimeSpendReport } from '@hcengineering/tracker'
 import { connectClient, type HulyClient } from './client'
 import { CliError } from './output'
-import type { CardRoleSummary, CardSummary, CardTypeSummary, ChannelSummary, ChatMemberSummary, ChatMessageSummary, ChatSpaceSummary, CommentSummary, ComponentSummary, DocumentSummary, IssueSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, TeamspaceSummary, TimeReportSummary, TimeTodoSummary } from './types'
+import type { BoardCardSummary, BoardSummary, CardRoleSummary, CardSummary, CardTypeSummary, ChannelSummary, ChatMemberSummary, ChatMessageSummary, ChatSpaceSummary, ChatThreadSummary, CommentSummary, ComponentSummary, DocumentSummary, DriveResourceSummary, DriveSummary, HrDepartmentSummary, HrEmployeeSummary, HrPublicHolidaySummary, HrRequestSummary, HrRequestTypeSummary, IssueSummary, IssueTemplateSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, RecruitApplicantStatusSummary, RecruitApplicantSummary, RecruitCandidateSummary, RecruitOpinionSummary, RecruitReviewSummary, RecruitVacancySummary, TeamspaceSummary, TimeReportSummary, TimeReportTotalsSummary, TimeTodoSummary } from './types'
+
+const { getDirectChannel } = require('@hcengineering/chunter/lib/utils.js') as {
+  getDirectChannel: (client: unknown, me: string, employeeAccount: string) => Promise<string>
+}
 
 const ISSUE_PRIORITY_LABELS: Record<number, string> = {
   [IssuePriority.NoPriority]: 'NoPriority',
@@ -727,6 +733,28 @@ async function mapIssue(
     ? (await listIssueLabelReferences(client, hydrated._id)).map((label) => label.title)
     : []
   const parent = hydrated.parents[0]
+  const relationRefs = Array.isArray(hydrated.relations) ? hydrated.relations : []
+  const blockerRefs = Array.isArray(hydrated.blockedBy) ? hydrated.blockedBy : []
+  const relatedIds = Array.from(new Set(
+    [...relationRefs, ...blockerRefs]
+      .map((relatedDoc) => normalizeUnknownRef(relatedDoc._id))
+      .filter((relatedId): relatedId is string => relatedId !== null)
+  ))
+  const relatedIssues = relatedIds.length > 0
+    ? await client.findAll(tracker.class.Issue, {
+        _id: { $in: relatedIds as never[] }
+      }, {
+        limit: relatedIds.length
+      })
+    : []
+  const relatedIdentifierById = new Map(relatedIssues.map((relatedIssue) => [relatedIssue._id as string, relatedIssue.identifier]))
+  const childInfo = Array.isArray(hydrated.childInfo) ? hydrated.childInfo : []
+  const relationIds = relationRefs
+    .map((relatedDoc) => normalizeUnknownRef(relatedDoc._id))
+    .filter((relatedId): relatedId is string => relatedId !== null)
+  const blockerIds = blockerRefs
+    .map((relatedDoc) => normalizeUnknownRef(relatedDoc._id))
+    .filter((relatedId): relatedId is string => relatedId !== null)
 
   return {
     id: hydrated._id,
@@ -746,8 +774,73 @@ async function mapIssue(
     reportedTime: hydrated.reportedTime ?? 0,
     labels,
     parentId: parent?.parentId ?? null,
-    parentIdentifier: parent?.identifier ?? null
+    parentIdentifier: parent?.identifier ?? null,
+    blockerIds,
+    blockerIdentifiers: blockerIds.map((relatedId) => relatedIdentifierById.get(relatedId) ?? relatedId),
+    relationIds,
+    relationIdentifiers: relationIds.map((relatedId) => relatedIdentifierById.get(relatedId) ?? relatedId),
+    subIssueCount: Math.max(hydrated.subIssues ?? 0, childInfo.length),
+    childEstimation: childInfo.reduce((total, child) => total + (child.estimation ?? 0), 0),
+    childReportedTime: childInfo.reduce((total, child) => total + (child.reportedTime ?? 0), 0),
+    templateId: hydrated.template?.template ?? null,
+    templateChildId: hydrated.template?.childId ?? null
   }
+}
+
+async function resolveIssueRelationRefs(
+  client: HulyClient,
+  issue: Issue,
+  identifiers: string[]
+): Promise<RelatedDocument[]> {
+  const uniqueIdentifiers = Array.from(new Set(identifiers))
+  const relatedIssues = await Promise.all(uniqueIdentifiers.map(async (value) => await getIssueByIdentifier(client, value)))
+
+  for (const relatedIssue of relatedIssues) {
+    if (relatedIssue._id === issue._id) {
+      throw new CliError('VALIDATION_ERROR', `Issue '${issue.identifier}' cannot reference itself.`, 4)
+    }
+  }
+
+  return relatedIssues.map((relatedIssue) => ({
+    _id: relatedIssue._id,
+    _class: relatedIssue._class
+  }))
+}
+
+async function updateIssueRelatedDocuments(
+  client: HulyClient,
+  identifier: string,
+  field: 'relations' | 'blockedBy',
+  relatedIdentifiers: string[],
+  mode: 'add' | 'remove'
+): Promise<IssueSummary> {
+  const issue = await getIssueByIdentifier(client, identifier)
+  const nextRefs = await resolveIssueRelationRefs(client, issue, relatedIdentifiers)
+  const currentRefs = Array.isArray(issue[field]) ? issue[field] : []
+  const currentById = new Map(
+    currentRefs.map((relatedDoc) => [relatedDoc._id as string, {
+      _id: relatedDoc._id,
+      _class: relatedDoc._class
+    }])
+  )
+
+  if (mode === 'add') {
+    for (const relatedDoc of nextRefs) {
+      currentById.set(relatedDoc._id as string, relatedDoc)
+    }
+  } else {
+    const removedIds = new Set(nextRefs.map((relatedDoc) => relatedDoc._id as string))
+
+    for (const relatedId of removedIds) {
+      currentById.delete(relatedId)
+    }
+  }
+
+  await client.updateDoc(tracker.class.Issue, issue.space as Ref<Project>, issue._id, {
+    [field]: [...currentById.values()]
+  } as never)
+
+  return await getIssueSummary(client, identifier)
 }
 
 export async function getTeamspaceByName(client: HulyClient, name: string): Promise<Teamspace> {
@@ -960,13 +1053,111 @@ export async function getIssueByIdentifier(client: HulyClient, identifier: strin
   return issue
 }
 
+async function mapIssueTemplates(client: HulyClient, templates: IssueTemplate[]): Promise<IssueTemplateSummary[]> {
+  const projectIds = Array.from(new Set(templates.map((template) => template.space as string)))
+  const assigneeIds = Array.from(new Set(
+    templates
+      .flatMap((template) => [
+        template.assignee,
+        ...template.children.map((child) => child.assignee)
+      ])
+      .map((value) => normalizeUnknownRef(value))
+      .filter((value) => value !== null) as string[]
+  ))
+  const componentIds = Array.from(new Set(
+    templates
+      .flatMap((template) => [
+        template.component,
+        ...template.children.map((child) => child.component)
+      ])
+      .map((value) => normalizeUnknownRef(value))
+      .filter((value) => value !== null) as string[]
+  ))
+  const milestoneIds = Array.from(new Set(
+    templates
+      .flatMap((template) => [
+        template.milestone,
+        ...template.children.map((child) => child.milestone)
+      ])
+      .map((value) => normalizeUnknownRef(value))
+      .filter((value) => value !== null) as string[]
+  ))
+  const labelIds = Array.from(new Set(
+    templates
+      .flatMap((template) => [
+        ...(template.labels ?? []),
+        ...template.children.flatMap((child) => child.labels ?? [])
+      ])
+      .map((value) => normalizeUnknownRef(value))
+      .filter((value) => value !== null) as string[]
+  ))
+
+  const [projects, assignees, components, milestones, labels] = await Promise.all([
+    projectIds.length > 0
+      ? client.findAll(tracker.class.Project, { _id: { $in: projectIds as never[] } }, { limit: projectIds.length })
+      : Promise.resolve([]),
+    assigneeIds.length > 0
+      ? client.findAll(contact.class.Person, { _id: { $in: assigneeIds as never[] } }, { limit: assigneeIds.length })
+      : Promise.resolve([]),
+    componentIds.length > 0
+      ? client.findAll(tracker.class.Component, { _id: { $in: componentIds as never[] } }, { limit: componentIds.length })
+      : Promise.resolve([]),
+    milestoneIds.length > 0
+      ? client.findAll(tracker.class.Milestone, { _id: { $in: milestoneIds as never[] } }, { limit: milestoneIds.length })
+      : Promise.resolve([]),
+    labelIds.length > 0
+      ? client.findAll(tags.class.TagElement, { _id: { $in: labelIds as never[] } }, { limit: labelIds.length })
+      : Promise.resolve([])
+  ])
+
+  const projectById = new Map(projects.map((project) => [project._id as string, project]))
+  const assigneeById = new Map(assignees.map((person) => [person._id as string, person]))
+  const componentById = new Map(components.map((component) => [component._id as string, component]))
+  const milestoneById = new Map(milestones.map((milestone) => [milestone._id as string, milestone]))
+  const labelById = new Map(labels.map((label) => [label._id as string, label]))
+  const emailByAssigneeId = await getEmailMapForPersons(client, assignees.map((person) => person._id as string))
+
+  return templates.map((template) => ({
+    id: template._id,
+    title: template.title,
+    description: template.description ? inlineMarkupToMarkdown(template.description) : null,
+    priority: ISSUE_PRIORITY_LABELS[template.priority] ?? template.priority,
+    assignee: template.assignee ? assigneeById.get(template.assignee as string)?.name ?? null : null,
+    assigneeEmail: template.assignee ? emailByAssigneeId.get(template.assignee as string) ?? null : null,
+    assigneeId: template.assignee ?? null,
+    component: template.component ? componentById.get(template.component as string)?.label ?? null : null,
+    componentId: template.component ?? null,
+    milestone: template.milestone ? milestoneById.get(template.milestone as string)?.label ?? null : null,
+    milestoneId: template.milestone ?? null,
+    project: projectById.get(template.space as string)?.identifier ?? null,
+    estimation: template.estimation ?? 0,
+    labels: (template.labels ?? []).map((labelId) => labelById.get(labelId as string)?.title ?? (labelId as string)),
+    relationIds: (template.relations ?? []).map((relation) => relation._id as string),
+    childCount: template.children.length,
+    children: template.children.map((child) => ({
+      id: child.id,
+      title: child.title,
+      priority: ISSUE_PRIORITY_LABELS[child.priority] ?? child.priority,
+      estimation: child.estimation ?? 0,
+      milestoneId: child.milestone ?? null,
+      componentId: child.component ?? null,
+      assigneeId: child.assignee ?? null,
+      labelIds: (child.labels ?? []).map((labelId) => labelId as string)
+    })),
+    createdOn: timestampToIso(template.createdOn),
+    modifiedOn: timestampToIso(template.modifiedOn)
+  }))
+}
+
 export async function listIssues(
   client: HulyClient,
   options: {
     projectIdentifier: string
-    status?: string
+    statuses?: string[]
     assignee?: string
     priority?: string
+    dateFrom?: string
+    dateTo?: string
     limit?: number
     sort?: string
   }
@@ -974,8 +1165,9 @@ export async function listIssues(
   const project = await getProjectByIdentifier(client, options.projectIdentifier)
   const query: Record<string, unknown> = { space: project._id }
 
-  if (options.status) {
-    query.status = await loadStatusForProject(client, project._id, options.status)
+  if (options.statuses && options.statuses.length > 0) {
+    const statusIds = await Promise.all(options.statuses.map(async (status) => await loadStatusForProject(client, project._id, status)))
+    query.status = statusIds.length === 1 ? statusIds[0] : { $in: statusIds }
   }
 
   if (options.assignee) {
@@ -984,6 +1176,20 @@ export async function listIssues(
 
   if (options.priority) {
     query.priority = parsePriority(options.priority)
+  }
+
+  if (options.dateFrom !== undefined || options.dateTo !== undefined) {
+    const dueDateQuery: Record<string, number> = {}
+
+    if (options.dateFrom !== undefined) {
+      dueDateQuery.$gte = new Date(options.dateFrom).getTime()
+    }
+
+    if (options.dateTo !== undefined) {
+      dueDateQuery.$lte = new Date(options.dateTo).getTime()
+    }
+
+    query.dueDate = dueDateQuery
   }
 
   const sortField = options.sort && options.sort.startsWith('-') ? options.sort.slice(1) : options.sort ?? 'modifiedOn'
@@ -1008,6 +1214,35 @@ export async function getIssueSummary(client: HulyClient, identifier: string): P
     includeDescription: true,
     includeLabels: true
   })
+}
+
+export async function listIssueTemplates(
+  client: HulyClient,
+  options: {
+    projectIdentifier: string
+    limit?: number
+  }
+): Promise<IssueTemplateSummary[]> {
+  const project = await getProjectByIdentifier(client, options.projectIdentifier)
+  const templates = await client.findAll(tracker.class.IssueTemplate, {
+    space: project._id
+  }, {
+    limit: options.limit ?? 100,
+    sort: { modifiedOn: SortingOrder.Descending }
+  })
+
+  return await mapIssueTemplates(client, templates)
+}
+
+export async function getIssueTemplateSummary(client: HulyClient, id: string): Promise<IssueTemplateSummary> {
+  const template = await client.findOne(tracker.class.IssueTemplate, { _id: id as Ref<IssueTemplate> })
+
+  if (!template) {
+    throw new CliError('NOT_FOUND', `Issue template '${id}' not found`, 3)
+  }
+
+  const [summary] = await mapIssueTemplates(client, [template])
+  return summary
 }
 
 export async function createIssue(
@@ -1186,6 +1421,22 @@ export async function deleteIssue(client: HulyClient, identifier: string): Promi
   const issue = await getIssueByIdentifier(client, identifier)
   await client.removeDoc(tracker.class.Issue, issue.space as Ref<Project>, issue._id)
   return { deleted: true, identifier }
+}
+
+export async function addIssueRelations(client: HulyClient, identifier: string, relatedIdentifiers: string[]): Promise<IssueSummary> {
+  return await updateIssueRelatedDocuments(client, identifier, 'relations', relatedIdentifiers, 'add')
+}
+
+export async function removeIssueRelations(client: HulyClient, identifier: string, relatedIdentifiers: string[]): Promise<IssueSummary> {
+  return await updateIssueRelatedDocuments(client, identifier, 'relations', relatedIdentifiers, 'remove')
+}
+
+export async function addIssueBlockers(client: HulyClient, identifier: string, relatedIdentifiers: string[]): Promise<IssueSummary> {
+  return await updateIssueRelatedDocuments(client, identifier, 'blockedBy', relatedIdentifiers, 'add')
+}
+
+export async function removeIssueBlockers(client: HulyClient, identifier: string, relatedIdentifiers: string[]): Promise<IssueSummary> {
+  return await updateIssueRelatedDocuments(client, identifier, 'blockedBy', relatedIdentifiers, 'remove')
 }
 
 export async function listLabels(client: HulyClient, projectIdentifier?: string): Promise<LabelSummary[]> {
@@ -1751,16 +2002,15 @@ async function mapTimeReports(client: HulyClient, reports: TimeSpendReport[]): P
   })
 }
 
-export async function listTimeReports(
+async function buildTimeReportQuery(
   client: HulyClient,
   options: {
     issueIdentifier?: string
     assignee?: string
     dateFrom?: string
     dateTo?: string
-    limit?: number
   }
-): Promise<TimeReportSummary[]> {
+): Promise<Record<string, unknown>> {
   const query: Record<string, unknown> = {
     attachedToClass: tracker.class.Issue,
     collection: 'reports'
@@ -1789,15 +2039,98 @@ export async function listTimeReports(
     query.date = dateFilters
   }
 
-  const reports = await client.findAll(tracker.class.TimeSpendReport, query as never, {
-    limit: options.limit ?? 20,
+  return query
+}
+
+async function findTimeReports(
+  client: HulyClient,
+  options: {
+    issueIdentifier?: string
+    assignee?: string
+    dateFrom?: string
+    dateTo?: string
+    limit?: number
+  }
+): Promise<TimeSpendReport[]> {
+  const query = await buildTimeReportQuery(client, options)
+
+  return await client.findAll(tracker.class.TimeSpendReport, query as never, {
+    ...(options.limit === undefined ? {} : { limit: options.limit }),
     sort: {
       date: SortingOrder.Descending,
       modifiedOn: SortingOrder.Descending
     }
   })
+}
+
+export async function listTimeReports(
+  client: HulyClient,
+  options: {
+    issueIdentifier?: string
+    assignee?: string
+    dateFrom?: string
+    dateTo?: string
+    limit?: number
+  }
+): Promise<TimeReportSummary[]> {
+  const reports = await findTimeReports(client, {
+    ...options,
+    limit: options.limit ?? 20
+  })
 
   return await mapTimeReports(client, reports)
+}
+
+export async function getTimeReportTotals(
+  client: HulyClient,
+  options: {
+    issueIdentifier?: string
+    assignee?: string
+    dateFrom?: string
+    dateTo?: string
+  }
+): Promise<TimeReportTotalsSummary> {
+  const reports = await mapTimeReports(client, await findTimeReports(client, options))
+  const byIssue = new Map<string, { issue: string | null, issueId: string | null, reportCount: number, totalValue: number }>()
+  const byEmployee = new Map<string, { employee: string | null, employeeEmail: string | null, employeeId: string | null, reportCount: number, totalValue: number }>()
+
+  for (const report of reports) {
+    const issueKey = report.issueId ?? '__none__'
+    const issueEntry = byIssue.get(issueKey) ?? {
+      issue: report.issue,
+      issueId: report.issueId,
+      reportCount: 0,
+      totalValue: 0
+    }
+    issueEntry.reportCount += 1
+    issueEntry.totalValue += report.value
+    byIssue.set(issueKey, issueEntry)
+
+    const employeeKey = report.employeeId ?? '__none__'
+    const employeeEntry = byEmployee.get(employeeKey) ?? {
+      employee: report.employee,
+      employeeEmail: report.employeeEmail,
+      employeeId: report.employeeId,
+      reportCount: 0,
+      totalValue: 0
+    }
+    employeeEntry.reportCount += 1
+    employeeEntry.totalValue += report.value
+    byEmployee.set(employeeKey, employeeEntry)
+  }
+
+  return {
+    reportCount: reports.length,
+    totalValue: reports.reduce((total, report) => total + report.value, 0),
+    filters: {
+      issue: options.issueIdentifier ?? null,
+      assignee: options.assignee ?? null,
+      dateFrom: options.dateFrom ?? null,
+      dateTo: options.dateTo ?? null
+    },
+    byIssue: [...byIssue.values()].sort((left, right) => right.totalValue - left.totalValue || right.reportCount - left.reportCount),
+    byEmployee: [...byEmployee.values()].sort((left, right) => right.totalValue - left.totalValue || right.reportCount - left.reportCount)
+  }
 }
 
 export async function getTimeReportSummary(client: HulyClient, id: string): Promise<TimeReportSummary> {
@@ -2137,6 +2470,7 @@ async function mapCards(
     parentTitle: cardDoc.parent ? parentById.get(cardDoc.parent)?.title ?? null : null,
     children: cardDoc.children ?? null,
     attachments: cardDoc.attachments ?? null,
+    readonly: typeof cardDoc.readonly === 'boolean' ? cardDoc.readonly : null,
     rank: cardDoc.rank ?? null,
     createdOn: timestampToIso(cardDoc.createdOn),
     modifiedOn: timestampToIso(cardDoc.modifiedOn)
@@ -2163,6 +2497,9 @@ export async function createCardType(
   options: {
     label: string
     extends?: string
+    color?: number
+    background?: number
+    removed?: boolean
   }
 ): Promise<CardTypeSummary> {
   const label = requireNonEmptyString(options.label, 'Card type label')
@@ -2173,7 +2510,10 @@ export async function createCardType(
     label: toEmbeddedLabel(label),
     icon: card.icon.MasterTag,
     kind: 0,
-    extends: extendsId
+    extends: extendsId,
+    ...(options.color === undefined ? {} : { color: options.color }),
+    ...(options.background === undefined ? {} : { background: options.background }),
+    ...(options.removed === undefined ? {} : { removed: options.removed })
   } as never)
 
   try {
@@ -2196,6 +2536,9 @@ export async function updateCardType(
   updates: {
     label?: string
     extends?: string
+    color?: number
+    background?: number
+    removed?: boolean
   }
 ): Promise<CardTypeSummary> {
   const typeDoc = await getMutableCardTypeDocById(client, id)
@@ -2215,6 +2558,18 @@ export async function updateCardType(
     }
 
     operations.extends = extendsId
+  }
+
+  if (updates.color !== undefined) {
+    operations.color = updates.color
+  }
+
+  if (updates.background !== undefined) {
+    operations.background = updates.background
+  }
+
+  if (updates.removed !== undefined) {
+    operations.removed = updates.removed
   }
 
   if (Object.keys(operations).length === 0) {
@@ -2372,6 +2727,7 @@ export async function createCard(
     content?: string
     type?: string
     parentId?: string
+    readonly?: boolean
   }
 ): Promise<CardSummary> {
   const cardClass = await resolveCardType(client, options.type)
@@ -2396,7 +2752,8 @@ export async function createCard(
       blobs: {},
       parentInfo,
       parent: parent?._id ?? null,
-      rank: makeRank(lastCard?.rank, undefined)
+      rank: makeRank(lastCard?.rank, undefined),
+      ...(options.readonly === undefined ? {} : { readonly: options.readonly })
     } as never
   )
 
@@ -2414,6 +2771,7 @@ export async function updateCard(
   updates: {
     title?: string
     content?: string
+    readonly?: boolean
   }
 ): Promise<CardSummary> {
   const cardDoc = await getCardById(client, id)
@@ -2425,6 +2783,10 @@ export async function updateCard(
 
   if (updates.content !== undefined) {
     operations.content = markdown(updates.content)
+  }
+
+  if (updates.readonly !== undefined) {
+    operations.readonly = updates.readonly
   }
 
   if (Object.keys(operations).length === 0) {
@@ -2500,6 +2862,23 @@ async function getChatChannelById(client: HulyClient, id: string): Promise<HulyC
   }
 
   return channel
+}
+
+async function findDirectChatByMembers(client: HulyClient, members: string[]): Promise<HulyDirectMessage | null> {
+  const normalizedMembers = [...members].sort()
+  const directMessages = await client.findAll(chunter.class.DirectMessage, {}, {
+    sort: { modifiedOn: SortingOrder.Descending }
+  })
+
+  for (const directMessage of directMessages) {
+    const directMembers = Array.isArray(directMessage.members) ? [...directMessage.members].sort() : []
+
+    if (directMembers.length === normalizedMembers.length && directMembers.every((member, index) => member === normalizedMembers[index])) {
+      return directMessage
+    }
+  }
+
+  return null
 }
 
 async function resolveChatMemberAccountUuid(client: HulyClient, email: string): Promise<string> {
@@ -2603,11 +2982,44 @@ async function mapChatMessageSummary(
   }
 }
 
+async function mapThreadMessageSummary(
+  client: HulyClient,
+  message: HulyThreadMessage,
+  authorNames: Map<string, string>,
+  chatSpace?: ChatSpaceDoc
+): Promise<ChatThreadSummary> {
+  const resolvedChatSpace = chatSpace ?? await getChatSpaceById(client, message.objectId)
+
+  return {
+    id: message._id,
+    parentMessageId: message.attachedTo,
+    chatId: message.objectId,
+    chatKind: getChatKind(resolvedChatSpace),
+    chatName: normalizeOptionalString(resolvedChatSpace.name),
+    message: await client.fetchMarkup(message._class, message._id, 'message', message.message as never, 'markdown'),
+    author: authorNames.get(message.modifiedBy) ?? message.modifiedBy,
+    authorId: message.modifiedBy,
+    createdOn: timestampToIso(message.createdOn),
+    modifiedOn: timestampToIso(message.modifiedOn),
+    editedOn: timestampToIso(message.editedOn)
+  }
+}
+
 async function getChatMessageById(client: HulyClient, id: string): Promise<ChatMessage> {
   const message = await client.findOne(chunter.class.ChatMessage, { _id: id as Ref<ChatMessage> })
 
   if (!message) {
     throw new CliError('NOT_FOUND', `Chat message '${id}' not found`, 3)
+  }
+
+  return message
+}
+
+async function getThreadMessageById(client: HulyClient, id: string): Promise<HulyThreadMessage> {
+  const message = await client.findOne(chunter.class.ThreadMessage, { _id: id as Ref<HulyThreadMessage> })
+
+  if (!message) {
+    throw new CliError('NOT_FOUND', `Thread message '${id}' not found`, 3)
   }
 
   return message
@@ -2631,6 +3043,37 @@ async function waitForChatMessageSummary(id: string, expectedMessage: string): P
 
     return {
       ...(lastSummary ?? await getChatMessageSummary(client, id)),
+      message: expectedMessage
+    }
+  } finally {
+    await client.close()
+  }
+}
+
+async function waitForThreadMessageSummary(id: string, expectedMessage: string): Promise<ChatThreadSummary> {
+  const { client } = await connectClient()
+
+  try {
+    let lastSummary: ChatThreadSummary | undefined
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const message = await getThreadMessageById(client, id)
+      const authorNames = await getAuthorNameMap(client, [message.modifiedBy])
+      lastSummary = await mapThreadMessageSummary(client, message, authorNames)
+
+      if (lastSummary.message === expectedMessage) {
+        return lastSummary
+      }
+
+      await sleep(2000)
+    }
+
+    return {
+      ...(lastSummary ?? await (async () => {
+        const message = await getThreadMessageById(client, id)
+        const authorNames = await getAuthorNameMap(client, [message.modifiedBy])
+        return await mapThreadMessageSummary(client, message, authorNames)
+      })()),
       message: expectedMessage
     }
   } finally {
@@ -2667,6 +3110,26 @@ export async function listChatSpaces(
 
 export async function getChatSpaceSummary(client: HulyClient, id: string): Promise<ChatSpaceSummary> {
   return mapChatSpaceSummary(await getChatSpaceById(client, id))
+}
+
+export async function getDirectChatSummary(client: HulyClient, memberEmail: string): Promise<ChatSpaceSummary> {
+  const account = await client.getAccount()
+  const memberAccountUuid = await resolveChatMemberAccountUuid(client, memberEmail)
+  const members = Array.from(new Set([account.uuid, memberAccountUuid])).sort()
+  const directMessage = await findDirectChatByMembers(client, members)
+
+  if (!directMessage) {
+    throw new CliError('NOT_FOUND', `Direct chat with '${memberEmail}' not found`, 3)
+  }
+
+  return mapChatSpaceSummary(directMessage)
+}
+
+export async function createDirectChat(client: HulyClient, memberEmail: string): Promise<ChatSpaceSummary> {
+  const account = await client.getAccount()
+  const memberAccountUuid = await resolveChatMemberAccountUuid(client, memberEmail)
+  const directChatId = await getDirectChannel(client as never, account.uuid as never, memberAccountUuid as never)
+  return await getChatSpaceSummary(client, directChatId)
 }
 
 export async function listChatMembers(client: HulyClient, id: string): Promise<ChatMemberSummary[]> {
@@ -2799,6 +3262,34 @@ export async function getChatMessageSummary(client: HulyClient, id: string): Pro
   return await mapChatMessageSummary(client, message, authorNames)
 }
 
+export async function listThreadMessages(
+  client: HulyClient,
+  options: {
+    parentMessageId: string
+    limit?: number
+  }
+): Promise<ChatThreadSummary[]> {
+  const parentMessage = await getChatMessageById(client, options.parentMessageId)
+  const chatSpace = await getChatSpaceById(client, parentMessage.attachedTo)
+  const messages = await client.findAll(chunter.class.ThreadMessage, {
+    attachedTo: parentMessage._id as never,
+    attachedToClass: chunter.class.ChatMessage as never,
+    collection: 'messages' as never
+  }, {
+    limit: options.limit ?? 20,
+    sort: { createdOn: SortingOrder.Ascending }
+  })
+  const authorNames = await getAuthorNameMap(client, messages.map((message) => message.modifiedBy))
+
+  return await Promise.all(messages.map(async (message) => await mapThreadMessageSummary(client, message, authorNames, chatSpace)))
+}
+
+export async function getThreadMessageSummary(client: HulyClient, id: string): Promise<ChatThreadSummary> {
+  const message = await getThreadMessageById(client, id)
+  const authorNames = await getAuthorNameMap(client, [message.modifiedBy])
+  return await mapThreadMessageSummary(client, message, authorNames)
+}
+
 export async function createChatMessage(
   client: HulyClient,
   options: {
@@ -2819,6 +3310,30 @@ export async function createChatMessage(
   )
 
   return await getChatMessageSummary(client, id)
+}
+
+export async function createThreadMessage(
+  client: HulyClient,
+  options: {
+    parentMessageId: string
+    message: string
+  }
+): Promise<ChatThreadSummary> {
+  const parentMessage = await getChatMessageById(client, options.parentMessageId)
+  const id = await client.addCollection(
+    chunter.class.ThreadMessage,
+    core.space.Space,
+    parentMessage._id,
+    chunter.class.ChatMessage,
+    'messages',
+    {
+      objectId: parentMessage.attachedTo,
+      objectClass: parentMessage.attachedToClass,
+      message: markdown(options.message)
+    } as never
+  )
+
+  return await getThreadMessageSummary(client, id)
 }
 
 export async function updateChatMessage(
@@ -2846,9 +3361,40 @@ export async function updateChatMessage(
   }
 }
 
+export async function updateThreadMessage(
+  client: HulyClient,
+  id: string,
+  updates: {
+    message?: string
+  }
+): Promise<ChatThreadSummary> {
+  const message = await getThreadMessageById(client, id)
+
+  if (updates.message === undefined) {
+    throw new CliError('VALIDATION_ERROR', 'No thread message fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(chunter.class.ThreadMessage, message.space, message._id, {
+    message: markdown(updates.message)
+  } as never)
+
+  const summary = await waitForThreadMessageSummary(id, updates.message)
+
+  return {
+    ...summary,
+    message: updates.message
+  }
+}
+
 export async function deleteChatMessage(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
   const message = await getChatMessageById(client, id)
   await client.removeDoc(chunter.class.ChatMessage, message.space, message._id)
+  return { deleted: true, id }
+}
+
+export async function deleteThreadMessage(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const message = await getThreadMessageById(client, id)
+  await client.removeDoc(chunter.class.ThreadMessage, message.space, message._id)
   return { deleted: true, id }
 }
 
@@ -2883,4 +3429,1791 @@ export async function getCurrentMember(client: HulyClient): Promise<Record<strin
         }
       : null
   }
+}
+
+const DRIVE_CLASS = 'drive:class:Drive'
+const DRIVE_TYPE = 'drive:spaceType:DefaultDrive'
+const DRIVE_FOLDER_CLASS = 'drive:class:Folder'
+const DRIVE_FILE_CLASS = 'drive:class:File'
+const RECRUIT_VACANCY_CLASS = 'recruit:class:Vacancy'
+const RECRUIT_VACANCY_TYPE = 'recruit:template:DefaultVacancy'
+const RECRUIT_APPLICANT_CLASS = 'recruit:class:Applicant'
+const RECRUIT_APPLICANT_TASK_TYPE = 'recruit:taskTypes:Applicant'
+const RECRUIT_CANDIDATE_MIXIN = 'recruit:mixin:Candidate'
+const RECRUIT_REVIEW_CLASS = 'recruit:class:Review'
+const RECRUIT_OPINION_CLASS = 'recruit:class:Opinion'
+const RECRUIT_REVIEW_COLLECTION = 'reviews'
+const RECRUIT_OPINION_COLLECTION = 'opinions'
+const DEFAULT_CALENDAR = 'calendar:default'
+const HR_REQUEST_COLLECTION = 'requests'
+const RECRUIT_APPLICANT_COLLECTION = 'applicants'
+
+function pluginLabelToText(value: string | null): string | null {
+  if (value === null) {
+    return null
+  }
+
+  const index = value.lastIndexOf(':')
+  return index === -1 ? value : value.slice(index + 1)
+}
+
+function tzDateToIso(value: unknown): string | null {
+  if (value === null || value === undefined || typeof value !== 'object') {
+    return null
+  }
+
+  try {
+    return new Date(fromTzDate(value as any)).toISOString()
+  } catch {
+    return null
+  }
+}
+
+function isoToTzDate(value: string): unknown {
+  return toTzDate(new Date(value))
+}
+
+async function findPersonNames(client: HulyClient, ids: Array<string | null | undefined>): Promise<Map<string, string>> {
+  const resolvedIds = Array.from(new Set(ids.filter((value): value is string => typeof value === 'string' && value.length > 0)))
+
+  if (resolvedIds.length === 0) {
+    return new Map()
+  }
+
+  const persons = await client.findAll(contact.class.Person, { _id: { $in: resolvedIds as never[] } }, { limit: resolvedIds.length })
+  return new Map(persons.map((person) => [person._id as string, person.name]))
+}
+
+async function findDepartmentNames(client: HulyClient, ids: Array<string | null | undefined>): Promise<Map<string, string>> {
+  const resolvedIds = Array.from(new Set(ids.filter((value): value is string => typeof value === 'string' && value.length > 0)))
+
+  if (resolvedIds.length === 0) {
+    return new Map()
+  }
+
+  const departments = await client.findAll(hr.class.Department, { _id: { $in: resolvedIds as never[] } }, { limit: resolvedIds.length })
+  return new Map(departments.map((department) => [department._id as string, department.name]))
+}
+
+async function getBoardById(client: HulyClient, id: string): Promise<any> {
+  const entry = await client.findOne(board.class.Board as any, { _id: id as never })
+
+  if (!entry) {
+    throw new CliError('NOT_FOUND', `Board '${id}' not found`, 3)
+  }
+
+  return entry
+}
+
+async function getBoardCardById(client: HulyClient, id: string): Promise<any> {
+  const entry = await client.findOne(board.class.Card as any, { _id: id as never })
+
+  if (!entry) {
+    throw new CliError('NOT_FOUND', `Board card '${id}' not found`, 3)
+  }
+
+  return entry
+}
+
+function mapBoardSummary(entry: any): BoardSummary {
+  return {
+    id: entry._id,
+    name: entry.name,
+    description: normalizeUnknownString(entry.description),
+    private: Boolean(entry.private),
+    archived: Boolean(entry.archived),
+    type: normalizeUnknownString(entry.type),
+    createdOn: timestampToIso(entry.createdOn),
+    modifiedOn: timestampToIso(entry.modifiedOn)
+  }
+}
+
+export async function listBoards(client: HulyClient): Promise<BoardSummary[]> {
+  const entries = await client.findAll(board.class.Board as any, {}, {
+    limit: 100,
+    sort: { name: SortingOrder.Ascending }
+  })
+
+  return entries.map((entry) => mapBoardSummary(entry))
+}
+
+export async function getBoardSummary(client: HulyClient, id: string): Promise<BoardSummary> {
+  return mapBoardSummary(await getBoardById(client, id))
+}
+
+export async function createBoard(
+  client: HulyClient,
+  options: {
+    name: string
+    description?: string
+    private?: boolean
+  }
+): Promise<BoardSummary> {
+  const id = await client.createDoc(board.class.Board as any, core.space.Space, {
+    name: options.name,
+    description: options.description ?? '',
+    type: 'board:template:DefaultBoard',
+    private: options.private ?? false,
+    archived: false,
+    members: []
+  } as never)
+
+  return await getBoardSummary(client, id)
+}
+
+export async function updateBoard(
+  client: HulyClient,
+  id: string,
+  updates: {
+    name?: string
+    description?: string
+    private?: boolean
+    archived?: boolean
+  }
+): Promise<BoardSummary> {
+  const entry = await getBoardById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.name !== undefined) {
+    operations.name = updates.name
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description
+  }
+
+  if (updates.private !== undefined) {
+    operations.private = updates.private
+  }
+
+  if (updates.archived !== undefined) {
+    operations.archived = updates.archived
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No board fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(board.class.Board as any, core.space.Space, entry._id, operations as never)
+  return await getBoardSummary(client, id)
+}
+
+export async function deleteBoard(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const entry = await getBoardById(client, id)
+  await client.removeDoc(board.class.Board as any, core.space.Space, entry._id)
+  return { deleted: true, id }
+}
+
+async function mapBoardCardSummaries(
+  client: HulyClient,
+  cards: any[],
+  options: {
+    includeDescription: boolean
+  }
+): Promise<BoardCardSummary[]> {
+  const boardIds = Array.from(new Set(
+    cards
+      .map((cardDoc) => normalizeUnknownRef(cardDoc.attachedTo))
+      .filter((value): value is string => value !== null)
+  ))
+  const assigneeIds = cards.map((cardDoc) => normalizeUnknownRef(cardDoc.assignee))
+  const [boards, assigneeNames] = await Promise.all([
+    boardIds.length > 0
+      ? client.findAll(board.class.Board as any, { _id: { $in: boardIds as never[] } }, { limit: boardIds.length })
+      : Promise.resolve([]),
+    findPersonNames(client, assigneeIds)
+  ])
+  const boardNameById = new Map<string, string>(boards.map((entry) => [entry._id as string, (entry as any).name as string]))
+
+  for (const boardId of boardIds) {
+    if (!boardNameById.has(boardId)) {
+      try {
+        boardNameById.set(boardId, (await getBoardById(client, boardId)).name as string)
+      } catch {}
+    }
+  }
+
+  return await Promise.all(cards.map(async (cardDoc) => {
+    const boardId = normalizeUnknownRef(cardDoc.attachedTo) ?? ''
+
+    return {
+      id: cardDoc._id,
+      boardId,
+      boardName: boardNameById.get(boardId) ?? null,
+      title: cardDoc.title,
+      description: options.includeDescription && cardDoc.description
+        ? await client.fetchMarkup(board.class.Card as any, cardDoc._id, 'description', cardDoc.description as never, 'markdown')
+        : null,
+      status: normalizeUnknownString(cardDoc.status),
+      number: typeof cardDoc.number === 'number' ? cardDoc.number : null,
+      assigneeId: normalizeUnknownRef(cardDoc.assignee),
+      assigneeName: assigneeNames.get(cardDoc.assignee) ?? null,
+      startDate: typeof cardDoc.startDate === 'number' && cardDoc.startDate > 0 ? timestampToIso(cardDoc.startDate) : null,
+      dueDate: typeof cardDoc.dueDate === 'number' && cardDoc.dueDate > 0 ? timestampToIso(cardDoc.dueDate) : null,
+      location: normalizeUnknownString(cardDoc.location),
+      archived: Boolean(cardDoc.isArchived),
+      createdOn: timestampToIso(cardDoc.createdOn),
+      modifiedOn: timestampToIso(cardDoc.modifiedOn)
+    }
+  }))
+}
+
+export async function listBoardCards(
+  client: HulyClient,
+  options: {
+    boardId?: string
+    limit?: number
+  }
+): Promise<BoardCardSummary[]> {
+  const query: Record<string, unknown> = {}
+
+  if (options.boardId !== undefined) {
+    query.attachedTo = (await getBoardById(client, options.boardId))._id
+  }
+
+  const cards = await client.findAll(board.class.Card as any, query as never, {
+    limit: options.limit ?? 20,
+    sort: { modifiedOn: SortingOrder.Descending }
+  })
+
+  return await mapBoardCardSummaries(client, cards, { includeDescription: false })
+}
+
+export async function getBoardCardSummary(client: HulyClient, id: string): Promise<BoardCardSummary> {
+  const [summary] = await mapBoardCardSummaries(client, [await getBoardCardById(client, id)], { includeDescription: true })
+  return summary
+}
+
+export async function createBoardCard(
+  client: HulyClient,
+  options: {
+    boardId: string
+    title: string
+    description?: string
+    location?: string
+    startDate?: string
+    dueDate?: string
+    archived?: boolean
+  }
+): Promise<BoardCardSummary> {
+  const boardDoc = await getBoardById(client, options.boardId)
+  const title = requireNonEmptyString(options.title, 'Board card title')
+  const [lastByNumber, lastByRank] = await Promise.all([
+    client.findOne(board.class.Card as any, { attachedTo: boardDoc._id as never }, {
+      sort: { number: SortingOrder.Descending }
+    }) as Promise<any>,
+    client.findOne(board.class.Card as any, { attachedTo: boardDoc._id as never }, {
+      sort: { rank: SortingOrder.Descending }
+    }) as Promise<any>
+  ])
+
+  const id = await client.addCollection(
+    board.class.Card as any,
+    core.space.Space,
+    boardDoc._id,
+    board.class.Board as any,
+    'cards',
+    {
+      title,
+      description: options.description ? markdown(options.description) : '',
+      kind: board.taskType.Card as any,
+      status: '',
+      number: (typeof lastByNumber?.number === 'number' ? lastByNumber.number : 0) + 1,
+      assignee: null,
+      dueDate: options.dueDate ? Date.parse(options.dueDate) : null,
+      rank: makeRank(lastByRank?.rank, undefined),
+      startDate: options.startDate ? Date.parse(options.startDate) : null,
+      location: options.location ?? '',
+      isArchived: options.archived ?? false
+    } as never
+  )
+
+  const summary = await getBoardCardSummary(client, id)
+  return {
+    ...summary,
+    description: options.description ?? summary.description
+  }
+}
+
+export async function updateBoardCard(
+  client: HulyClient,
+  id: string,
+  updates: {
+    title?: string
+    description?: string
+    location?: string | null
+    startDate?: string | null
+    dueDate?: string | null
+    archived?: boolean
+  }
+): Promise<BoardCardSummary> {
+  const cardDoc = await getBoardCardById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.title !== undefined) {
+    operations.title = requireNonEmptyString(updates.title, 'Board card title')
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description ? markdown(updates.description) : ''
+  }
+
+  if (updates.location !== undefined) {
+    operations.location = updates.location ?? ''
+  }
+
+  if (updates.startDate !== undefined) {
+    operations.startDate = updates.startDate ? Date.parse(updates.startDate) : null
+  }
+
+  if (updates.dueDate !== undefined) {
+    operations.dueDate = updates.dueDate ? Date.parse(updates.dueDate) : null
+  }
+
+  if (updates.archived !== undefined) {
+    operations.isArchived = updates.archived
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No board card fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(board.class.Card as any, core.space.Space, cardDoc._id, operations as never)
+
+  if (updates.description !== undefined) {
+    const summary = await getBoardCardSummary(client, id)
+    return {
+      ...summary,
+      description: updates.description
+    }
+  }
+
+  return await getBoardCardSummary(client, id)
+}
+
+export async function deleteBoardCard(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const cardDoc = await getBoardCardById(client, id)
+  await client.removeDoc(board.class.Card as any, core.space.Space, cardDoc._id)
+  return { deleted: true, id }
+}
+
+async function getDriveById(client: HulyClient, id: string): Promise<any> {
+  const entry = await client.findOne(DRIVE_CLASS as any, { _id: id as never })
+
+  if (!entry) {
+    throw new CliError('NOT_FOUND', `Drive '${id}' not found`, 3)
+  }
+
+  return entry
+}
+
+function mapDriveSummary(entry: any): DriveSummary {
+  return {
+    id: entry._id,
+    name: entry.name,
+    description: normalizeUnknownString(entry.description),
+    private: Boolean(entry.private),
+    archived: Boolean(entry.archived),
+    type: normalizeUnknownString(entry.type),
+    createdOn: timestampToIso(entry.createdOn),
+    modifiedOn: timestampToIso(entry.modifiedOn)
+  }
+}
+
+export async function listDrives(client: HulyClient): Promise<DriveSummary[]> {
+  const entries = await client.findAll(DRIVE_CLASS as any, {}, {
+    limit: 100,
+    sort: { name: SortingOrder.Ascending }
+  })
+
+  return entries.map((entry) => mapDriveSummary(entry))
+}
+
+export async function getDriveSummary(client: HulyClient, id: string): Promise<DriveSummary> {
+  return mapDriveSummary(await getDriveById(client, id))
+}
+
+export async function createDrive(
+  client: HulyClient,
+  options: {
+    name: string
+    description?: string
+    private?: boolean
+  }
+): Promise<DriveSummary> {
+  const id = await client.createDoc(DRIVE_CLASS as any, core.space.Space, {
+    name: options.name,
+    description: options.description ?? '',
+    type: DRIVE_TYPE,
+    private: options.private ?? false,
+    archived: false,
+    members: []
+  } as never)
+
+  return await getDriveSummary(client, id)
+}
+
+export async function updateDrive(
+  client: HulyClient,
+  id: string,
+  updates: {
+    name?: string
+    description?: string
+    private?: boolean
+    archived?: boolean
+  }
+): Promise<DriveSummary> {
+  const entry = await getDriveById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.name !== undefined) {
+    operations.name = updates.name
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description
+  }
+
+  if (updates.private !== undefined) {
+    operations.private = updates.private
+  }
+
+  if (updates.archived !== undefined) {
+    operations.archived = updates.archived
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No drive fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(DRIVE_CLASS as any, core.space.Space, entry._id, operations as never)
+  return await getDriveSummary(client, id)
+}
+
+export async function deleteDrive(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const entry = await getDriveById(client, id)
+  await client.removeDoc(DRIVE_CLASS as any, core.space.Space, entry._id)
+  return { deleted: true, id }
+}
+
+async function getDriveResourceById(client: HulyClient, className: string, id: string): Promise<any> {
+  const entry = await client.findOne(className as any, { _id: id as never })
+
+  if (!entry) {
+    throw new CliError('NOT_FOUND', `Drive resource '${id}' not found`, 3)
+  }
+
+  return entry
+}
+
+function mapDriveResourceSummary(className: string, entry: any): DriveResourceSummary {
+  return {
+    id: entry._id,
+    class: className === DRIVE_FOLDER_CLASS ? 'folder' : 'file',
+    title: normalizeUnknownString(entry.title),
+    name: normalizeUnknownString(entry.name),
+    docUpdateMessages: typeof entry.docUpdateMessages === 'number' ? entry.docUpdateMessages : null,
+    createdOn: timestampToIso(entry.createdOn),
+    modifiedOn: timestampToIso(entry.modifiedOn)
+  }
+}
+
+async function listDriveResources(client: HulyClient, className: string): Promise<DriveResourceSummary[]> {
+  const entries = await client.findAll(className as any, {}, {
+    limit: 100,
+    sort: { title: SortingOrder.Ascending }
+  })
+
+  return entries.map((entry) => mapDriveResourceSummary(className, entry))
+}
+
+async function getDriveResourceSummary(client: HulyClient, className: string, id: string): Promise<DriveResourceSummary> {
+  return mapDriveResourceSummary(className, await getDriveResourceById(client, className, id))
+}
+
+async function createDriveResource(
+  client: HulyClient,
+  className: string,
+  options: {
+    title: string
+    name?: string
+  }
+): Promise<DriveResourceSummary> {
+  const id = await client.createDoc(className as any, core.space.Workspace, {
+    title: options.title,
+    name: options.name ?? options.title
+  } as never)
+
+  return await getDriveResourceSummary(client, className, id)
+}
+
+async function updateDriveResource(
+  client: HulyClient,
+  className: string,
+  id: string,
+  updates: {
+    title?: string
+    name?: string
+  }
+): Promise<DriveResourceSummary> {
+  const entry = await getDriveResourceById(client, className, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.title !== undefined) {
+    operations.title = updates.title
+  }
+
+  if (updates.name !== undefined) {
+    operations.name = updates.name
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No drive resource fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(className as any, core.space.Workspace, entry._id, operations as never)
+  return await getDriveResourceSummary(client, className, id)
+}
+
+async function deleteDriveResource(client: HulyClient, className: string, id: string): Promise<{ deleted: true, id: string }> {
+  const entry = await getDriveResourceById(client, className, id)
+  await client.removeDoc(className as any, core.space.Workspace, entry._id)
+  return { deleted: true, id }
+}
+
+export async function listDriveFolders(client: HulyClient): Promise<DriveResourceSummary[]> {
+  return await listDriveResources(client, DRIVE_FOLDER_CLASS)
+}
+
+export async function getDriveFolderSummary(client: HulyClient, id: string): Promise<DriveResourceSummary> {
+  return await getDriveResourceSummary(client, DRIVE_FOLDER_CLASS, id)
+}
+
+export async function createDriveFolder(client: HulyClient, options: { title: string, name?: string }): Promise<DriveResourceSummary> {
+  return await createDriveResource(client, DRIVE_FOLDER_CLASS, options)
+}
+
+export async function updateDriveFolder(client: HulyClient, id: string, updates: { title?: string, name?: string }): Promise<DriveResourceSummary> {
+  return await updateDriveResource(client, DRIVE_FOLDER_CLASS, id, updates)
+}
+
+export async function deleteDriveFolder(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  return await deleteDriveResource(client, DRIVE_FOLDER_CLASS, id)
+}
+
+export async function listDriveFiles(client: HulyClient): Promise<DriveResourceSummary[]> {
+  return await listDriveResources(client, DRIVE_FILE_CLASS)
+}
+
+export async function getDriveFileSummary(client: HulyClient, id: string): Promise<DriveResourceSummary> {
+  return await getDriveResourceSummary(client, DRIVE_FILE_CLASS, id)
+}
+
+export async function createDriveFile(client: HulyClient, options: { title: string, name?: string }): Promise<DriveResourceSummary> {
+  return await createDriveResource(client, DRIVE_FILE_CLASS, options)
+}
+
+export async function updateDriveFile(client: HulyClient, id: string, updates: { title?: string, name?: string }): Promise<DriveResourceSummary> {
+  return await updateDriveResource(client, DRIVE_FILE_CLASS, id, updates)
+}
+
+export async function deleteDriveFile(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  return await deleteDriveResource(client, DRIVE_FILE_CLASS, id)
+}
+
+async function getHrDepartmentById(client: HulyClient, id: string): Promise<any> {
+  const department = await client.findOne(hr.class.Department as any, { _id: id as never })
+
+  if (!department) {
+    throw new CliError('NOT_FOUND', `Department '${id}' not found`, 3)
+  }
+
+  return department
+}
+
+async function mapHrDepartmentSummary(client: HulyClient, department: any): Promise<HrDepartmentSummary> {
+  const [personNames, departmentNames] = await Promise.all([
+    findPersonNames(client, [department.teamLead]),
+    findDepartmentNames(client, [department.parent])
+  ])
+
+  return {
+    id: department._id,
+    name: department.name,
+    description: normalizeUnknownString(department.description),
+    parentId: normalizeUnknownRef(department.parent),
+    parentName: department.parent ? departmentNames.get(department.parent as string) ?? null : null,
+    teamLeadId: normalizeUnknownRef(department.teamLead),
+    teamLeadName: department.teamLead ? personNames.get(department.teamLead as string) ?? null : null,
+    memberIds: (department.members ?? []).map((value: unknown) => String(value)),
+    managerIds: (department.managers ?? []).map((value: unknown) => String(value)),
+    createdOn: timestampToIso(department.createdOn),
+    modifiedOn: timestampToIso(department.modifiedOn)
+  }
+}
+
+export async function listHrDepartments(client: HulyClient): Promise<HrDepartmentSummary[]> {
+  const departments = await client.findAll(hr.class.Department as any, {}, {
+    limit: 100,
+    sort: { name: SortingOrder.Ascending }
+  })
+
+  return await Promise.all(departments.map(async (department) => await mapHrDepartmentSummary(client, department)))
+}
+
+export async function getHrDepartmentSummary(client: HulyClient, id: string): Promise<HrDepartmentSummary> {
+  return await mapHrDepartmentSummary(client, await getHrDepartmentById(client, id))
+}
+
+export async function createHrDepartment(
+  client: HulyClient,
+  options: {
+    name: string
+    description?: string
+    parent?: string
+    teamLead?: string
+  }
+): Promise<HrDepartmentSummary> {
+  const id = await client.createDoc(hr.class.Department as any, core.space.Workspace, {
+    name: options.name,
+    description: options.description ?? '',
+    ...(options.parent === undefined ? {} : { parent: options.parent }),
+    teamLead: options.teamLead ?? null,
+    members: [],
+    managers: []
+  } as never)
+
+  return await getHrDepartmentSummary(client, id)
+}
+
+export async function updateHrDepartment(
+  client: HulyClient,
+  id: string,
+  updates: {
+    name?: string
+    description?: string
+    parent?: string | null
+    teamLead?: string | null
+  }
+): Promise<HrDepartmentSummary> {
+  const department = await getHrDepartmentById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.name !== undefined) {
+    operations.name = updates.name
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description
+  }
+
+  if (updates.parent !== undefined) {
+    operations.parent = updates.parent
+  }
+
+  if (updates.teamLead !== undefined) {
+    operations.teamLead = updates.teamLead
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No department fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(hr.class.Department as any, core.space.Workspace, department._id, operations as never)
+  return await getHrDepartmentSummary(client, id)
+}
+
+export async function deleteHrDepartment(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const department = await getHrDepartmentById(client, id)
+  await client.removeDoc(hr.class.Department as any, core.space.Workspace, department._id)
+  return { deleted: true, id }
+}
+
+function mapHrEmployeeSummary(employee: any, email: string | null, departmentName: string | null): HrEmployeeSummary {
+  const employeeMixin = employee['contact:mixin:Employee'] ?? {}
+  const staffMixin = employee['hr:mixin:Staff'] ?? {}
+
+  return {
+    id: employee._id,
+    name: employee.name,
+    email,
+    departmentId: normalizeUnknownRef(staffMixin.department),
+    departmentName,
+    active: typeof employeeMixin.active === 'boolean' ? employeeMixin.active : null,
+    role: normalizeUnknownString(employeeMixin.role),
+    personUuid: normalizeUnknownString(employee.personUuid)
+  }
+}
+
+export async function listHrEmployees(client: HulyClient, limit?: number): Promise<HrEmployeeSummary[]> {
+  const employees = await client.findAll(hr.mixin.Staff as any, {}, {
+    limit: limit ?? 100,
+    sort: { name: SortingOrder.Ascending }
+  }) as any[]
+  const departmentNames = await findDepartmentNames(
+    client,
+    employees.map((employee) => (employee['hr:mixin:Staff'] ?? {}).department as string | undefined)
+  )
+
+  return await Promise.all(employees.map(async (employee) => {
+    const departmentId = normalizeUnknownRef((employee['hr:mixin:Staff'] ?? {}).department)
+    return mapHrEmployeeSummary(
+      employee,
+      await findEmailForPerson(client, employee._id),
+      departmentId ? departmentNames.get(departmentId) ?? null : null
+    )
+  }))
+}
+
+export async function getHrEmployeeSummary(client: HulyClient, id: string): Promise<HrEmployeeSummary> {
+  const employee = await client.findOne(hr.mixin.Staff as any, { _id: id as never }) as any
+
+  if (!employee) {
+    throw new CliError('NOT_FOUND', `Employee '${id}' not found`, 3)
+  }
+
+  const departmentId = normalizeUnknownRef((employee['hr:mixin:Staff'] ?? {}).department)
+  const departmentNames = await findDepartmentNames(client, [departmentId])
+
+  return mapHrEmployeeSummary(
+    employee,
+    await findEmailForPerson(client, employee._id),
+    departmentId ? departmentNames.get(departmentId) ?? null : null
+  )
+}
+
+export async function listHrRequestTypes(client: HulyClient): Promise<HrRequestTypeSummary[]> {
+  const requestTypes = await client.findAll(hr.class.RequestType as any, {}, {
+    limit: 100,
+    sort: { value: SortingOrder.Ascending }
+  }) as any[]
+
+  return requestTypes.map((entry) => ({
+    id: entry._id,
+    label: pluginLabelToText(normalizeUnknownString(entry.label)) ?? entry._id,
+    value: typeof entry.value === 'number' ? entry.value : null,
+    color: typeof entry.color === 'number' ? entry.color : null
+  }))
+}
+
+async function getHrPublicHolidayById(client: HulyClient, id: string): Promise<any> {
+  const holiday = await client.findOne(hr.class.PublicHoliday as any, { _id: id as never })
+
+  if (!holiday) {
+    throw new CliError('NOT_FOUND', `Public holiday '${id}' not found`, 3)
+  }
+
+  return holiday
+}
+
+async function mapHrPublicHolidaySummary(client: HulyClient, holiday: any): Promise<HrPublicHolidaySummary> {
+  const departmentNames = await findDepartmentNames(client, [holiday.department])
+
+  return {
+    id: holiday._id,
+    title: holiday.title,
+    description: normalizeUnknownString(holiday.description),
+    date: tzDateToIso(holiday.date),
+    departmentId: normalizeUnknownRef(holiday.department),
+    departmentName: holiday.department ? departmentNames.get(holiday.department as string) ?? null : null,
+    createdOn: timestampToIso(holiday.createdOn),
+    modifiedOn: timestampToIso(holiday.modifiedOn)
+  }
+}
+
+export async function listHrPublicHolidays(client: HulyClient, departmentId?: string): Promise<HrPublicHolidaySummary[]> {
+  const holidays = await client.findAll(hr.class.PublicHoliday as any, departmentId ? { department: departmentId as never } : {}, {
+    limit: 100,
+    sort: { createdOn: SortingOrder.Descending }
+  })
+
+  return await Promise.all(holidays.map(async (holiday) => await mapHrPublicHolidaySummary(client, holiday)))
+}
+
+export async function getHrPublicHolidaySummary(client: HulyClient, id: string): Promise<HrPublicHolidaySummary> {
+  return await mapHrPublicHolidaySummary(client, await getHrPublicHolidayById(client, id))
+}
+
+export async function createHrPublicHoliday(
+  client: HulyClient,
+  options: {
+    title: string
+    description?: string
+    date: string
+    departmentId?: string
+  }
+): Promise<HrPublicHolidaySummary> {
+  const id = await client.createDoc(hr.class.PublicHoliday as any, core.space.Workspace, {
+    title: options.title,
+    description: options.description ?? '',
+    date: isoToTzDate(options.date),
+    department: options.departmentId ?? hr.ids.Head
+  } as never)
+
+  return await getHrPublicHolidaySummary(client, id)
+}
+
+export async function updateHrPublicHoliday(
+  client: HulyClient,
+  id: string,
+  updates: {
+    title?: string
+    description?: string
+    date?: string
+    departmentId?: string
+  }
+): Promise<HrPublicHolidaySummary> {
+  const holiday = await getHrPublicHolidayById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.title !== undefined) {
+    operations.title = updates.title
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description
+  }
+
+  if (updates.date !== undefined) {
+    operations.date = isoToTzDate(updates.date)
+  }
+
+  if (updates.departmentId !== undefined) {
+    operations.department = updates.departmentId
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No public holiday fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(hr.class.PublicHoliday as any, core.space.Workspace, holiday._id, operations as never)
+  return await getHrPublicHolidaySummary(client, id)
+}
+
+export async function deleteHrPublicHoliday(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const holiday = await getHrPublicHolidayById(client, id)
+  await client.removeDoc(hr.class.PublicHoliday as any, core.space.Workspace, holiday._id)
+  return { deleted: true, id }
+}
+
+async function getHrRequestById(client: HulyClient, id: string): Promise<any> {
+  const request = await client.findOne(hr.class.Request as any, { _id: id as never })
+
+  if (!request) {
+    throw new CliError('NOT_FOUND', `Request '${id}' not found`, 3)
+  }
+
+  return request
+}
+
+async function getCurrentPersonId(client: HulyClient): Promise<string> {
+  const account = await client.getAccount()
+  const current = await client.findOne(contact.mixin.Employee, { personUuid: account.uuid as never })
+
+  if (!current) {
+    throw new CliError('NOT_FOUND', 'Current member not found in the workspace', 3)
+  }
+
+  return current._id as string
+}
+
+async function mapHrRequestSummary(client: HulyClient, request: any): Promise<HrRequestSummary> {
+  const [personNames, departmentNames, requestTypes] = await Promise.all([
+    findPersonNames(client, [request.attachedTo]),
+    findDepartmentNames(client, [request.department]),
+    client.findAll(hr.class.RequestType as any, { _id: { $in: [request.type].filter(Boolean) as never[] } }, { limit: 1 })
+  ])
+  const requestType = (requestTypes as any[])[0]
+
+  return {
+    id: request._id,
+    employeeId: normalizeUnknownRef(request.attachedTo),
+    employeeName: request.attachedTo ? personNames.get(request.attachedTo as string) ?? null : null,
+    departmentId: normalizeUnknownRef(request.department),
+    departmentName: request.department ? departmentNames.get(request.department as string) ?? null : null,
+    typeId: normalizeUnknownRef(request.type),
+    typeLabel: requestType ? pluginLabelToText(normalizeUnknownString(requestType.label)) ?? requestType._id : normalizeUnknownRef(request.type),
+    description: normalizeUnknownString(request.description),
+    date: tzDateToIso(request.tzDate),
+    dueDate: tzDateToIso(request.tzDueDate),
+    createdOn: timestampToIso(request.createdOn),
+    modifiedOn: timestampToIso(request.modifiedOn)
+  }
+}
+
+export async function listHrRequests(client: HulyClient, employeeId?: string): Promise<HrRequestSummary[]> {
+  const requests = await client.findAll(hr.class.Request as any, employeeId ? { attachedTo: employeeId as never } : {}, {
+    limit: 100,
+    sort: { createdOn: SortingOrder.Descending }
+  })
+
+  return await Promise.all(requests.map(async (request) => await mapHrRequestSummary(client, request)))
+}
+
+export async function getHrRequestSummary(client: HulyClient, id: string): Promise<HrRequestSummary> {
+  return await mapHrRequestSummary(client, await getHrRequestById(client, id))
+}
+
+export async function createHrRequest(
+  client: HulyClient,
+  options: {
+    employeeId?: string
+    departmentId?: string
+    typeId: string
+    description?: string
+    date: string
+    dueDate?: string
+  }
+): Promise<HrRequestSummary> {
+  const employeeId = options.employeeId ?? await getCurrentPersonId(client)
+  const employee = await client.findOne(contact.class.Person, { _id: employeeId as never }) as any
+
+  if (!employee) {
+    throw new CliError('NOT_FOUND', `Employee '${employeeId}' not found`, 3)
+  }
+
+  const departmentId = options.departmentId ?? normalizeUnknownRef((employee['hr:mixin:Staff'] ?? {}).department) ?? 'hr:ids:Head'
+
+  const id = await client.addCollection(
+    hr.class.Request as any,
+    core.space.Workspace,
+    employeeId as any,
+    contact.class.Person as any,
+    HR_REQUEST_COLLECTION,
+    {
+      attachedToClass: contact.class.Person,
+      department: departmentId,
+      type: options.typeId,
+      description: options.description ?? '',
+      tzDate: isoToTzDate(options.date),
+      tzDueDate: isoToTzDate(options.dueDate ?? options.date)
+    } as never
+  )
+
+  return await getHrRequestSummary(client, id)
+}
+
+export async function updateHrRequest(
+  client: HulyClient,
+  id: string,
+  updates: {
+    departmentId?: string
+    typeId?: string
+    description?: string
+    date?: string
+    dueDate?: string
+  }
+): Promise<HrRequestSummary> {
+  const request = await getHrRequestById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.departmentId !== undefined) {
+    operations.department = updates.departmentId
+  }
+
+  if (updates.typeId !== undefined) {
+    operations.type = updates.typeId
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description
+  }
+
+  if (updates.date !== undefined) {
+    operations.tzDate = isoToTzDate(updates.date)
+  }
+
+  if (updates.dueDate !== undefined) {
+    operations.tzDueDate = isoToTzDate(updates.dueDate)
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No request fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(hr.class.Request as any, core.space.Workspace, request._id, operations as never)
+  return await getHrRequestSummary(client, id)
+}
+
+export async function deleteHrRequest(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const request = await getHrRequestById(client, id)
+  await client.removeDoc(hr.class.Request as any, core.space.Workspace, request._id)
+  return { deleted: true, id }
+}
+
+async function getRecruitVacancyById(client: HulyClient, id: string): Promise<any> {
+  const vacancy = await client.findOne(RECRUIT_VACANCY_CLASS as any, { _id: id as never })
+
+  if (!vacancy) {
+    throw new CliError('NOT_FOUND', `Vacancy '${id}' not found`, 3)
+  }
+
+  return vacancy
+}
+
+async function mapRecruitVacancySummary(client: HulyClient, vacancy: any): Promise<RecruitVacancySummary> {
+  const applicants = await client.findAll(RECRUIT_APPLICANT_CLASS as any, { attachedTo: vacancy._id as never }, { limit: 1 })
+
+  return {
+    id: vacancy._id,
+    name: vacancy.name,
+    description: normalizeUnknownString(vacancy.description),
+    fullDescription: vacancy.fullDescription
+      ? await client.fetchMarkup(RECRUIT_VACANCY_CLASS as any, vacancy._id, 'fullDescription', vacancy.fullDescription, 'markdown')
+      : null,
+    location: normalizeUnknownString(vacancy.location),
+    dueDate: timestampToIso(vacancy.dueTo),
+    private: Boolean(vacancy.private),
+    archived: Boolean(vacancy.archived),
+    type: normalizeUnknownString(vacancy.type),
+    applicantCount: applicants.length,
+    createdOn: timestampToIso(vacancy.createdOn),
+    modifiedOn: timestampToIso(vacancy.modifiedOn)
+  }
+}
+
+export async function listRecruitVacancies(client: HulyClient): Promise<RecruitVacancySummary[]> {
+  const vacancies = await client.findAll(RECRUIT_VACANCY_CLASS as any, {}, {
+    limit: 100,
+    sort: { name: SortingOrder.Ascending }
+  })
+
+  return await Promise.all(vacancies.map(async (vacancy) => await mapRecruitVacancySummary(client, vacancy)))
+}
+
+export async function getRecruitVacancySummary(client: HulyClient, id: string): Promise<RecruitVacancySummary> {
+  return await mapRecruitVacancySummary(client, await getRecruitVacancyById(client, id))
+}
+
+export async function createRecruitVacancy(
+  client: HulyClient,
+  options: {
+    name: string
+    description?: string
+    fullDescription?: string
+    location?: string
+    dueDate?: string
+    private?: boolean
+  }
+): Promise<RecruitVacancySummary> {
+  const id = await client.createDoc(RECRUIT_VACANCY_CLASS as any, core.space.Space, {
+    name: options.name,
+    description: options.description ?? '',
+    fullDescription: options.fullDescription ? markdown(options.fullDescription) : null,
+    ...(options.location === undefined ? {} : { location: options.location }),
+    ...(options.dueDate === undefined ? {} : { dueTo: new Date(options.dueDate).getTime() }),
+    type: RECRUIT_VACANCY_TYPE,
+    private: options.private ?? false,
+    archived: false,
+    members: []
+  } as never)
+
+  return await getRecruitVacancySummary(client, id)
+}
+
+export async function updateRecruitVacancy(
+  client: HulyClient,
+  id: string,
+  updates: {
+    name?: string
+    description?: string
+    location?: string
+    dueDate?: string
+    private?: boolean
+    archived?: boolean
+  }
+): Promise<RecruitVacancySummary> {
+  const vacancy = await getRecruitVacancyById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.name !== undefined) {
+    operations.name = updates.name
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description
+  }
+
+  if (updates.location !== undefined) {
+    operations.location = updates.location
+  }
+
+  if (updates.dueDate !== undefined) {
+    operations.dueTo = new Date(updates.dueDate).getTime()
+  }
+
+  if (updates.private !== undefined) {
+    operations.private = updates.private
+  }
+
+  if (updates.archived !== undefined) {
+    operations.archived = updates.archived
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No vacancy fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(RECRUIT_VACANCY_CLASS as any, core.space.Space, vacancy._id, operations as never)
+  return await getRecruitVacancySummary(client, id)
+}
+
+export async function deleteRecruitVacancy(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const vacancy = await getRecruitVacancyById(client, id)
+  await client.removeDoc(RECRUIT_VACANCY_CLASS as any, core.space.Space, vacancy._id)
+  return { deleted: true, id }
+}
+
+async function getRecruitApplicantById(client: HulyClient, id: string): Promise<any> {
+  const applicant = await client.findOne(RECRUIT_APPLICANT_CLASS as any, { _id: id as never })
+
+  if (!applicant) {
+    throw new CliError('NOT_FOUND', `Applicant '${id}' not found`, 3)
+  }
+
+  return applicant
+}
+
+export async function listRecruitApplicantStatuses(client: HulyClient): Promise<RecruitApplicantStatusSummary[]> {
+  const taskType = await client.findOne(task.class.TaskType as any, { _id: RECRUIT_APPLICANT_TASK_TYPE as never }) as any
+
+  if (!taskType) {
+    throw new CliError('NOT_FOUND', `Recruit applicant task type '${RECRUIT_APPLICANT_TASK_TYPE}' not found`, 3)
+  }
+
+  const statusIds = (taskType?.statuses ?? []).map((status: unknown) => String(status))
+
+  if (statusIds.length === 0) {
+    return []
+  }
+
+  const statuses = await client.findAll(core.class.Status, { _id: { $in: statusIds as never[] } }, { limit: statusIds.length || 20 })
+  const statusById = new Map(statuses.map((status) => [status._id as string, status]))
+
+  return statusIds.map((id: string) => {
+    const status = statusById.get(id)
+
+    return {
+      id,
+      name: status?.name ?? id,
+      color: typeof status?.color === 'number' ? status.color : null
+    }
+  })
+}
+
+async function resolveRecruitApplicantStatus(client: HulyClient, value: string): Promise<string> {
+  const status = (await listRecruitApplicantStatuses(client)).find((entry) => normalizeString(entry.name) === normalizeString(value))
+
+  if (!status) {
+    throw new CliError('NOT_FOUND', `Recruit applicant status '${value}' not found`, 3)
+  }
+
+  return status.id
+}
+
+async function mapRecruitApplicantSummary(client: HulyClient, applicant: any): Promise<RecruitApplicantSummary> {
+  const [vacancy, assigneeNames, statuses] = await Promise.all([
+    applicant.attachedTo ? client.findOne(RECRUIT_VACANCY_CLASS as any, { _id: applicant.attachedTo as never }) : Promise.resolve(undefined),
+    findPersonNames(client, [applicant.assignee]),
+    applicant.status
+      ? client.findAll(core.class.Status, { _id: { $in: [applicant.status] as never[] } }, { limit: 1 })
+      : Promise.resolve([])
+  ])
+  const vacancyEntry = vacancy as any
+  const status = (statuses as any[])[0]
+
+  return {
+    id: applicant._id,
+    vacancyId: normalizeUnknownRef(applicant.attachedTo),
+    vacancyName: vacancyEntry ? vacancyEntry.name : null,
+    identifier: normalizeUnknownString(applicant.identifier),
+    number: typeof applicant.number === 'number' ? applicant.number : null,
+    status: status?.name ?? normalizeUnknownRef(applicant.status),
+    assigneeId: normalizeUnknownRef(applicant.assignee),
+    assigneeName: applicant.assignee ? assigneeNames.get(applicant.assignee as string) ?? null : null,
+    startDate: typeof applicant.startDate === 'number' && applicant.startDate > 0 ? timestampToIso(applicant.startDate) : null,
+    dueDate: typeof applicant.dueDate === 'number' && applicant.dueDate > 0 ? timestampToIso(applicant.dueDate) : null,
+    createdOn: timestampToIso(applicant.createdOn),
+    modifiedOn: timestampToIso(applicant.modifiedOn)
+  }
+}
+
+export async function listRecruitApplicants(client: HulyClient, vacancyId?: string): Promise<RecruitApplicantSummary[]> {
+  const applicants = await client.findAll(
+    RECRUIT_APPLICANT_CLASS as any,
+    vacancyId ? { attachedTo: vacancyId as never } : {},
+    {
+      limit: 100,
+      sort: { createdOn: SortingOrder.Descending }
+    }
+  )
+
+  return await Promise.all(applicants.map(async (applicant) => await mapRecruitApplicantSummary(client, applicant)))
+}
+
+export async function getRecruitApplicantSummary(client: HulyClient, id: string): Promise<RecruitApplicantSummary> {
+  return await mapRecruitApplicantSummary(client, await getRecruitApplicantById(client, id))
+}
+
+export async function createRecruitApplicant(
+  client: HulyClient,
+  options: {
+    vacancyId: string
+    identifier: string
+    status?: string
+    assigneeId?: string
+    startDate?: string
+    dueDate?: string
+  }
+): Promise<RecruitApplicantSummary> {
+  const vacancy = await getRecruitVacancyById(client, options.vacancyId)
+  const [lastByNumber] = await client.findAll(RECRUIT_APPLICANT_CLASS as any, {
+    attachedTo: vacancy._id as never
+  }, {
+    limit: 1,
+    sort: { number: SortingOrder.Descending }
+  }) as any[]
+  const [lastByRank] = await client.findAll(RECRUIT_APPLICANT_CLASS as any, {
+    attachedTo: vacancy._id as never
+  }, {
+    limit: 1,
+    sort: { rank: SortingOrder.Descending }
+  }) as any[]
+  const statusId = options.status ? await resolveRecruitApplicantStatus(client, options.status) : 'recruit:taskTypeStatus:Backlog'
+
+  const id = await client.addCollection(
+    RECRUIT_APPLICANT_CLASS as any,
+    core.space.Space,
+    vacancy._id,
+    RECRUIT_VACANCY_CLASS as any,
+    RECRUIT_APPLICANT_COLLECTION,
+    {
+      status: statusId,
+      kind: RECRUIT_APPLICANT_TASK_TYPE,
+      number: (typeof lastByNumber?.number === 'number' ? lastByNumber.number : 0) + 1,
+      assignee: options.assigneeId ?? null,
+      startDate: options.startDate ? new Date(options.startDate).getTime() : null,
+      dueDate: options.dueDate ? new Date(options.dueDate).getTime() : null,
+      identifier: options.identifier,
+      rank: makeRank(lastByRank?.rank, undefined)
+    } as never
+  )
+
+  return await getRecruitApplicantSummary(client, id)
+}
+
+export async function updateRecruitApplicant(
+  client: HulyClient,
+  id: string,
+  updates: {
+    identifier?: string
+    status?: string
+    assigneeId?: string | null
+    startDate?: string | null
+    dueDate?: string | null
+  }
+): Promise<RecruitApplicantSummary> {
+  const applicant = await getRecruitApplicantById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.identifier !== undefined) {
+    operations.identifier = updates.identifier
+  }
+
+  if (updates.status !== undefined) {
+    operations.status = await resolveRecruitApplicantStatus(client, updates.status)
+  }
+
+  if (updates.assigneeId !== undefined) {
+    operations.assignee = updates.assigneeId
+  }
+
+  if (updates.startDate !== undefined) {
+    operations.startDate = updates.startDate === null ? null : new Date(updates.startDate).getTime()
+  }
+
+  if (updates.dueDate !== undefined) {
+    operations.dueDate = updates.dueDate === null ? null : new Date(updates.dueDate).getTime()
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No applicant fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(RECRUIT_APPLICANT_CLASS as any, core.space.Space, applicant._id, operations as never)
+  return await getRecruitApplicantSummary(client, id)
+}
+
+export async function deleteRecruitApplicant(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const applicant = await getRecruitApplicantById(client, id)
+  await client.removeDoc(RECRUIT_APPLICANT_CLASS as any, core.space.Space, applicant._id)
+  return { deleted: true, id }
+}
+
+async function getRecruitCandidateById(client: HulyClient, id: string): Promise<any> {
+  const candidate = await client.findOne(RECRUIT_CANDIDATE_MIXIN as any, { _id: id as never })
+
+  if (!candidate) {
+    throw new CliError('NOT_FOUND', `Candidate '${id}' not found`, 3)
+  }
+
+  return candidate
+}
+
+function mapRecruitCandidateSummary(candidate: any): RecruitCandidateSummary {
+  const mixin = candidate[RECRUIT_CANDIDATE_MIXIN] ?? {}
+
+  return {
+    id: candidate._id,
+    name: candidate.name,
+    city: normalizeUnknownString(candidate.city),
+    title: normalizeUnknownString(mixin.title),
+    source: normalizeUnknownString(mixin.source),
+    remote: typeof mixin.remote === 'boolean' ? mixin.remote : null,
+    onsite: typeof mixin.onsite === 'boolean' ? mixin.onsite : null,
+    applications: typeof mixin.applications === 'number' ? mixin.applications : null,
+    reviews: typeof mixin.reviews === 'number' ? mixin.reviews : null,
+    createdOn: timestampToIso(candidate.createdOn),
+    modifiedOn: timestampToIso(candidate.modifiedOn)
+  }
+}
+
+export async function listRecruitCandidates(client: HulyClient): Promise<RecruitCandidateSummary[]> {
+  const candidates = await client.findAll(RECRUIT_CANDIDATE_MIXIN as any, {}, {
+    limit: 100,
+    sort: { name: SortingOrder.Ascending }
+  })
+
+  return candidates.map((candidate) => mapRecruitCandidateSummary(candidate))
+}
+
+export async function getRecruitCandidateSummary(client: HulyClient, id: string): Promise<RecruitCandidateSummary> {
+  return mapRecruitCandidateSummary(await getRecruitCandidateById(client, id))
+}
+
+export async function createRecruitCandidate(
+  client: HulyClient,
+  options: {
+    name: string
+    city?: string
+    title?: string
+    source?: string
+    remote?: boolean
+    onsite?: boolean
+  }
+): Promise<RecruitCandidateSummary> {
+  const id = await client.createDoc(contact.class.Person as any, 'contact:space:Contacts' as any, {
+    name: options.name,
+    city: options.city ?? ''
+  } as never)
+
+  await client.updateDoc(contact.class.Person as any, 'contact:space:Contacts' as any, id as any, {
+    [RECRUIT_CANDIDATE_MIXIN]: {
+      ...(options.title === undefined ? {} : { title: options.title }),
+      ...(options.source === undefined ? {} : { source: options.source }),
+      ...(options.remote === undefined ? {} : { remote: options.remote }),
+      ...(options.onsite === undefined ? {} : { onsite: options.onsite })
+    }
+  } as never)
+
+  return await getRecruitCandidateSummary(client, id)
+}
+
+export async function updateRecruitCandidate(
+  client: HulyClient,
+  id: string,
+  updates: {
+    name?: string
+    city?: string
+    title?: string
+    source?: string
+    remote?: boolean
+    onsite?: boolean
+  }
+): Promise<RecruitCandidateSummary> {
+  const candidate = await getRecruitCandidateById(client, id)
+  const personOperations: Record<string, unknown> = {}
+  const mixinOperations: Record<string, unknown> = {}
+
+  if (updates.name !== undefined) {
+    personOperations.name = updates.name
+  }
+
+  if (updates.city !== undefined) {
+    personOperations.city = updates.city
+  }
+
+  if (updates.title !== undefined) {
+    mixinOperations.title = updates.title
+  }
+
+  if (updates.source !== undefined) {
+    mixinOperations.source = updates.source
+  }
+
+  if (updates.remote !== undefined) {
+    mixinOperations.remote = updates.remote
+  }
+
+  if (updates.onsite !== undefined) {
+    mixinOperations.onsite = updates.onsite
+  }
+
+  if (Object.keys(personOperations).length === 0 && Object.keys(mixinOperations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No candidate fields were provided to update.', 4)
+  }
+
+  if (Object.keys(mixinOperations).length > 0) {
+    personOperations[RECRUIT_CANDIDATE_MIXIN] = {
+      ...(candidate[RECRUIT_CANDIDATE_MIXIN] ?? {}),
+      ...mixinOperations
+    }
+  }
+
+  await client.updateDoc(contact.class.Person as any, 'contact:space:Contacts' as any, candidate._id, personOperations as never)
+  return await getRecruitCandidateSummary(client, id)
+}
+
+export async function deleteRecruitCandidate(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const candidate = await getRecruitCandidateById(client, id)
+  await client.removeDoc(contact.class.Person as any, 'contact:space:Contacts' as any, candidate._id)
+  return { deleted: true, id }
+}
+
+async function getRecruitReviewById(client: HulyClient, id: string): Promise<any> {
+  const review = await client.findOne(RECRUIT_REVIEW_CLASS as any, { _id: id as never })
+
+  if (!review) {
+    throw new CliError('NOT_FOUND', `Review '${id}' not found`, 3)
+  }
+
+  return review
+}
+
+async function mapRecruitReviewSummaries(
+  client: HulyClient,
+  reviews: any[],
+  options: {
+    includeDescription: boolean
+  }
+): Promise<RecruitReviewSummary[]> {
+  const candidateIds = reviews.map((review) => normalizeUnknownRef(review.attachedTo))
+  const candidateNames = await findPersonNames(client, candidateIds)
+
+  return await Promise.all(reviews.map(async (review) => ({
+    id: review._id,
+    candidateId: normalizeUnknownRef(review.attachedTo),
+    candidateName: candidateNames.get(review.attachedTo) ?? null,
+    title: review.title,
+    description: options.includeDescription && review.description
+      ? await client.fetchMarkup(RECRUIT_REVIEW_CLASS as any, review._id, 'description', review.description as never, 'markdown')
+      : null,
+    verdict: normalizeUnknownString(review.verdict),
+    applicantId: normalizeUnknownRef(review.application),
+    location: normalizeUnknownString(review.location),
+    date: timestampToIso(review.date),
+    dueDate: timestampToIso(review.dueDate),
+    allDay: Boolean(review.allDay),
+    opinionCount: typeof review.opinions === 'number' ? review.opinions : null,
+    createdOn: timestampToIso(review.createdOn),
+    modifiedOn: timestampToIso(review.modifiedOn)
+  })))
+}
+
+export async function listRecruitReviews(
+  client: HulyClient,
+  options: {
+    candidateId?: string
+    applicantId?: string
+    limit?: number
+  }
+): Promise<RecruitReviewSummary[]> {
+  const query: Record<string, unknown> = {}
+
+  if (options.candidateId !== undefined) {
+    query.attachedTo = (await getRecruitCandidateById(client, options.candidateId))._id
+  }
+
+  if (options.applicantId !== undefined) {
+    query.application = (await getRecruitApplicantById(client, options.applicantId))._id
+  }
+
+  const reviews = await client.findAll(RECRUIT_REVIEW_CLASS as any, query as never, {
+    limit: options.limit ?? 50,
+    sort: { createdOn: SortingOrder.Descending }
+  })
+
+  return await mapRecruitReviewSummaries(client, reviews, { includeDescription: false })
+}
+
+export async function getRecruitReviewSummary(client: HulyClient, id: string): Promise<RecruitReviewSummary> {
+  const [summary] = await mapRecruitReviewSummaries(client, [await getRecruitReviewById(client, id)], { includeDescription: true })
+  return summary
+}
+
+export async function createRecruitReview(
+  client: HulyClient,
+  options: {
+    candidateId: string
+    title: string
+    verdict: string
+    description?: string
+    location?: string
+    date: string
+    dueDate?: string
+    applicantId?: string
+  }
+): Promise<RecruitReviewSummary> {
+  const candidate = await getRecruitCandidateById(client, options.candidateId)
+  const applicantId = options.applicantId !== undefined
+    ? (await getRecruitApplicantById(client, options.applicantId))._id
+    : undefined
+  const currentPersonId = await getCurrentPersonId(client)
+  const [lastReview] = await client.findAll(RECRUIT_REVIEW_CLASS as any, {
+    attachedTo: candidate._id as never
+  }, {
+    limit: 1,
+    sort: { number: SortingOrder.Descending }
+  }) as any[]
+  const id = await client.addCollection(
+    RECRUIT_REVIEW_CLASS as any,
+    core.space.Space,
+    candidate._id,
+    contact.class.Person as any,
+    RECRUIT_REVIEW_COLLECTION,
+    {
+      eventId: generateId(),
+      title: requireNonEmptyString(options.title, 'Review title'),
+      description: options.description ? markdown(options.description) : '',
+      calendar: DEFAULT_CALENDAR,
+      location: options.location ?? '',
+      allDay: true,
+      date: new Date(options.date).getTime(),
+      dueDate: new Date(options.dueDate ?? options.date).getTime(),
+      participants: [],
+      access: 'owner',
+      user: currentPersonId,
+      blockTime: false,
+      number: (typeof lastReview?.number === 'number' ? lastReview.number : 0) + 1,
+      verdict: requireNonEmptyString(options.verdict, 'Review verdict'),
+      ...(applicantId === undefined ? {} : { application: applicantId })
+    } as never
+  )
+
+  const summary = await getRecruitReviewSummary(client, id)
+  return {
+    ...summary,
+    description: options.description ?? summary.description
+  }
+}
+
+export async function updateRecruitReview(
+  client: HulyClient,
+  id: string,
+  updates: {
+    title?: string
+    verdict?: string
+    description?: string
+    location?: string | null
+    date?: string
+    dueDate?: string
+    applicantId?: string | null
+  }
+): Promise<RecruitReviewSummary> {
+  const review = await getRecruitReviewById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.title !== undefined) {
+    operations.title = requireNonEmptyString(updates.title, 'Review title')
+  }
+
+  if (updates.verdict !== undefined) {
+    operations.verdict = requireNonEmptyString(updates.verdict, 'Review verdict')
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description ? markdown(updates.description) : ''
+  }
+
+  if (updates.location !== undefined) {
+    operations.location = updates.location ?? ''
+  }
+
+  if (updates.date !== undefined) {
+    operations.date = new Date(updates.date).getTime()
+  }
+
+  if (updates.dueDate !== undefined) {
+    operations.dueDate = new Date(updates.dueDate).getTime()
+  }
+
+  if (updates.applicantId !== undefined) {
+    operations.application = updates.applicantId === null ? null : (await getRecruitApplicantById(client, updates.applicantId))._id
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No review fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(RECRUIT_REVIEW_CLASS as any, core.space.Space, review._id, operations as never)
+
+  if (updates.description !== undefined) {
+    const summary = await getRecruitReviewSummary(client, id)
+    return {
+      ...summary,
+      description: updates.description
+    }
+  }
+
+  return await getRecruitReviewSummary(client, id)
+}
+
+export async function deleteRecruitReview(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const review = await getRecruitReviewById(client, id)
+  await client.removeDoc(RECRUIT_REVIEW_CLASS as any, core.space.Space, review._id)
+  return { deleted: true, id }
+}
+
+async function getRecruitOpinionById(client: HulyClient, id: string): Promise<any> {
+  const opinion = await client.findOne(RECRUIT_OPINION_CLASS as any, { _id: id as never })
+
+  if (!opinion) {
+    throw new CliError('NOT_FOUND', `Opinion '${id}' not found`, 3)
+  }
+
+  return opinion
+}
+
+async function mapRecruitOpinionSummaries(
+  client: HulyClient,
+  opinions: any[],
+  options: {
+    includeDescription: boolean
+  }
+): Promise<RecruitOpinionSummary[]> {
+  const reviewIds = Array.from(new Set(
+    opinions
+      .map((opinion) => normalizeUnknownRef(opinion.attachedTo))
+      .filter((value): value is string => value !== null)
+  ))
+  const reviews = reviewIds.length > 0
+    ? await client.findAll(RECRUIT_REVIEW_CLASS as any, { _id: { $in: reviewIds as never[] } }, { limit: reviewIds.length })
+    : []
+  const reviewTitleById = new Map<string, string>(reviews.map((review) => [review._id as string, (review as any).title as string]))
+
+  return await Promise.all(opinions.map(async (opinion) => ({
+    id: opinion._id,
+    reviewId: normalizeUnknownRef(opinion.attachedTo),
+    reviewTitle: reviewTitleById.get(opinion.attachedTo) ?? null,
+    value: normalizeUnknownString(opinion.value),
+    description: options.includeDescription && opinion.description
+      ? await client.fetchMarkup(RECRUIT_OPINION_CLASS as any, opinion._id, 'description', opinion.description as never, 'markdown')
+      : null,
+    number: typeof opinion.number === 'number' ? opinion.number : null,
+    createdOn: timestampToIso(opinion.createdOn),
+    modifiedOn: timestampToIso(opinion.modifiedOn)
+  })))
+}
+
+export async function listRecruitOpinions(
+  client: HulyClient,
+  options: {
+    reviewId?: string
+    limit?: number
+  }
+): Promise<RecruitOpinionSummary[]> {
+  const query: Record<string, unknown> = {}
+
+  if (options.reviewId !== undefined) {
+    query.attachedTo = (await getRecruitReviewById(client, options.reviewId))._id
+  }
+
+  const opinions = await client.findAll(RECRUIT_OPINION_CLASS as any, query as never, {
+    limit: options.limit ?? 50,
+    sort: { createdOn: SortingOrder.Descending }
+  })
+
+  return await mapRecruitOpinionSummaries(client, opinions, { includeDescription: false })
+}
+
+export async function getRecruitOpinionSummary(client: HulyClient, id: string): Promise<RecruitOpinionSummary> {
+  const [summary] = await mapRecruitOpinionSummaries(client, [await getRecruitOpinionById(client, id)], { includeDescription: true })
+  return summary
+}
+
+export async function createRecruitOpinion(
+  client: HulyClient,
+  options: {
+    reviewId: string
+    value: string
+    description?: string
+  }
+): Promise<RecruitOpinionSummary> {
+  const review = await getRecruitReviewById(client, options.reviewId)
+  const [lastOpinion] = await client.findAll(RECRUIT_OPINION_CLASS as any, {
+    attachedTo: review._id as never
+  }, {
+    limit: 1,
+    sort: { number: SortingOrder.Descending }
+  }) as any[]
+  const id = await client.addCollection(
+    RECRUIT_OPINION_CLASS as any,
+    core.space.Space,
+    review._id,
+    RECRUIT_REVIEW_CLASS as any,
+    RECRUIT_OPINION_COLLECTION,
+    {
+      number: (typeof lastOpinion?.number === 'number' ? lastOpinion.number : 0) + 1,
+      description: options.description ? markdown(options.description) : '',
+      value: requireNonEmptyString(options.value, 'Opinion value')
+    } as never
+  )
+
+  const summary = await getRecruitOpinionSummary(client, id)
+  return {
+    ...summary,
+    description: options.description ?? summary.description
+  }
+}
+
+export async function updateRecruitOpinion(
+  client: HulyClient,
+  id: string,
+  updates: {
+    value?: string
+    description?: string
+  }
+): Promise<RecruitOpinionSummary> {
+  const opinion = await getRecruitOpinionById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.value !== undefined) {
+    operations.value = requireNonEmptyString(updates.value, 'Opinion value')
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description ? markdown(updates.description) : ''
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No opinion fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(RECRUIT_OPINION_CLASS as any, core.space.Space, opinion._id, operations as never)
+
+  if (updates.description !== undefined) {
+    const summary = await getRecruitOpinionSummary(client, id)
+    return {
+      ...summary,
+      description: updates.description
+    }
+  }
+
+  return await getRecruitOpinionSummary(client, id)
+}
+
+export async function deleteRecruitOpinion(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const opinion = await getRecruitOpinionById(client, id)
+  await client.removeDoc(RECRUIT_OPINION_CLASS as any, core.space.Space, opinion._id)
+  return { deleted: true, id }
 }

@@ -1,10 +1,13 @@
 import { Command, CommanderError } from 'commander'
 import { registerAuthCommands } from './commands/auth'
+import { registerBoardCommands } from './commands/board'
 import { registerCardCommands } from './commands/card'
 import { registerChatCommands } from './commands/chat'
 import { registerCommentCommands } from './commands/comment'
 import { registerComponentCommands } from './commands/component'
 import { registerDocumentCommands } from './commands/document'
+import { registerDriveCommands } from './commands/drive'
+import { registerHrCommands } from './commands/hr'
 import { registerIssueCommands } from './commands/issue'
 import { registerLabelCommands } from './commands/label'
 import { registerMemberCommands } from './commands/member'
@@ -12,6 +15,7 @@ import { registerMilestoneCommands } from './commands/milestone'
 import { registerNotificationCommands } from './commands/notification'
 import { registerPersonCommands } from './commands/person'
 import { registerProjectCommands } from './commands/project'
+import { registerRecruitCommands } from './commands/recruit'
 import { registerSetupSkillCommand } from './commands/setup-skill'
 import { registerTeamspaceCommands } from './commands/teamspace'
 import { registerTimeCommands } from './commands/time'
@@ -63,8 +67,11 @@ export function buildProgram(): Command {
     })
 
   registerAuthCommands(program)
+  registerBoardCommands(program)
   registerCardCommands(program)
   registerChatCommands(program)
+  registerDriveCommands(program)
+  registerHrCommands(program)
   registerProjectCommands(program)
   registerIssueCommands(program)
   registerLabelCommands(program)
@@ -76,6 +83,7 @@ export function buildProgram(): Command {
   registerDocumentCommands(program)
   registerComponentCommands(program)
   registerCommentCommands(program)
+  registerRecruitCommands(program)
   registerTimeCommands(program)
   registerSetupSkillCommand(program)
 

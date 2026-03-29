@@ -7,6 +7,7 @@ import {
   createTimeTodo,
   deleteTimeReport,
   deleteTimeTodo,
+  getTimeReportTotals,
   getTimeReportSummary,
   getTimeTodoSummary,
   listTimeReports,
@@ -50,6 +51,13 @@ type TimeReportCreateOptions = {
   description: string
   assignee?: string
   date?: string
+}
+
+type TimeReportTotalsOptions = {
+  issue?: string
+  assignee?: string
+  dateFrom?: string
+  dateTo?: string
 }
 
 type TimeUpdateOptions = {
@@ -246,6 +254,23 @@ export function registerTimeCommands(program: Command): void {
     .argument('<id>', 'Time report id')
 
   handleCommand(reportGet, async (id: string) => await withClient(async (client) => await getTimeReportSummary(client, id)))
+
+  const reportTotals = report
+    .command('totals')
+    .description('Aggregate issue time reports')
+    .option('--issue <identifier>', 'Filter by issue identifier')
+    .option('--assignee <email>', 'Filter by assignee email')
+    .option('--date-from <date>', 'Only include reports on or after this ISO-8601 date')
+    .option('--date-to <date>', 'Only include reports on or before this ISO-8601 date')
+
+  handleCommand(reportTotals, async (options: TimeReportTotalsOptions) => {
+    return await withClient(async (client) => await getTimeReportTotals(client, {
+      issueIdentifier: options.issue,
+      assignee: options.assignee,
+      dateFrom: parseIsoDate(options.dateFrom, '--date-from'),
+      dateTo: parseIsoDate(options.dateTo, '--date-to')
+    }))
+  })
 
   const reportCreate = report
     .command('create')
