@@ -1,7 +1,7 @@
 import { Command } from 'commander'
 import { handleCommand } from '../lib/command'
 import { withClient } from '../lib/client'
-import { createDrive, createDriveFile, createDriveFolder, deleteDrive, deleteDriveFile, deleteDriveFolder, getDriveFileSummary, getDriveFolderSummary, getDriveSummary, listDriveFiles, listDriveFolders, listDrives, updateDrive, updateDriveFile, updateDriveFolder } from '../lib/huly'
+import { createDrive, createDriveFile, createDriveFolder, deleteDrive, deleteDriveFile, deleteDriveFolder, getDriveFileSummary, getDriveFolderSummary, getDriveSummary, listDriveFileActivity, listDriveFiles, listDriveFolderActivity, listDriveFolders, listDrives, updateDrive, updateDriveFile, updateDriveFolder } from '../lib/huly'
 import { CliError } from '../lib/output'
 
 type DriveCreateOptions = {
@@ -27,6 +27,10 @@ type DriveResourceCreateOptions = {
 type DriveResourceUpdateOptions = {
   title?: string
   name?: string
+}
+
+type DriveActivityListOptions = {
+  limit?: string
 }
 
 function resolvePrivate(options: Pick<DriveUpdateOptions, 'private' | 'public'>): boolean | undefined {
@@ -59,6 +63,19 @@ function resolveArchived(options: Pick<DriveUpdateOptions, 'archive' | 'unarchiv
   }
 
   return undefined
+}
+
+function parseLimit(limit: string | undefined): number | undefined {
+  if (limit === undefined) {
+    return undefined
+  }
+
+  const parsed = Number(limit)
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new CliError('VALIDATION_ERROR', 'Invalid --limit value: ' + limit, 4)
+  }
+
+  return parsed
 }
 
 export function registerDriveCommands(program: Command): void {
@@ -151,6 +168,16 @@ export function registerDriveCommands(program: Command): void {
     return await withClient(async (client) => await updateDriveFolder(client, id, options))
   })
 
+  const folderActivity = folder
+    .command('activity')
+    .description('List drive folder activity')
+    .argument('<id>', 'Drive folder id')
+    .option('--limit <n>', 'Maximum number of activity messages')
+
+  handleCommand(folderActivity, async (id: string, options: DriveActivityListOptions) => {
+    return await withClient(async (client) => await listDriveFolderActivity(client, id, parseLimit(options.limit)))
+  })
+
   const folderDelete = folder
     .command('delete')
     .description('Delete a drive folder')
@@ -192,6 +219,16 @@ export function registerDriveCommands(program: Command): void {
 
   handleCommand(fileUpdate, async (id: string, options: DriveResourceUpdateOptions) => {
     return await withClient(async (client) => await updateDriveFile(client, id, options))
+  })
+
+  const fileActivity = file
+    .command('activity')
+    .description('List drive file activity')
+    .argument('<id>', 'Drive file id')
+    .option('--limit <n>', 'Maximum number of activity messages')
+
+  handleCommand(fileActivity, async (id: string, options: DriveActivityListOptions) => {
+    return await withClient(async (client) => await listDriveFileActivity(client, id, parseLimit(options.limit)))
   })
 
   const fileDelete = file

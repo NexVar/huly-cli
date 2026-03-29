@@ -16,7 +16,7 @@ import time, { ToDoPriority, type ToDo } from '@hcengineering/time'
 import tracker, { IssuePriority, MilestoneStatus, type Component, type Issue, type IssueTemplate, type Milestone, type Project, type TimeSpendReport } from '@hcengineering/tracker'
 import { connectClient, type HulyClient } from './client'
 import { CliError } from './output'
-import type { BoardCardSummary, BoardSummary, CardRoleSummary, CardSummary, CardTypeSummary, ChannelSummary, ChatMemberSummary, ChatMessageSummary, ChatSpaceSummary, ChatThreadSummary, CommentSummary, ComponentSummary, DocumentSummary, DriveResourceSummary, DriveSummary, HrDepartmentSummary, HrEmployeeSummary, HrPublicHolidaySummary, HrRequestSummary, HrRequestTypeSummary, IssueSummary, IssueTemplateSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, RecruitApplicantStatusSummary, RecruitApplicantSummary, RecruitCandidateSummary, RecruitOpinionSummary, RecruitReviewSummary, RecruitVacancySummary, TeamspaceSummary, TimeReportSummary, TimeReportTotalsSummary, TimeTodoSummary } from './types'
+import type { BoardCardSummary, BoardColumnSummary, BoardSummary, CardRoleSummary, CardSummary, CardTypeSummary, ChannelSummary, ChatMemberSummary, ChatMessageSummary, ChatSpaceSummary, ChatThreadSummary, CommentSummary, ComponentSummary, DocumentSummary, DriveActivitySummary, DriveResourceSummary, DriveSummary, HrDepartmentSummary, HrEmployeeSummary, HrPublicHolidaySummary, HrRequestSummary, HrRequestTypeSummary, IssueSummary, IssueTemplateSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, RecruitApplicantStatusSummary, RecruitApplicantSummary, RecruitCandidateSummary, RecruitOpinionSummary, RecruitReviewSummary, RecruitVacancySummary, TeamspaceSummary, TimeReportSummary, TimeReportTotalsSummary, TimeTodoSummary } from './types'
 
 const { getDirectChannel } = require('@hcengineering/chunter/lib/utils.js') as {
   getDirectChannel: (client: unknown, me: string, employeeAccount: string) => Promise<string>
@@ -44,6 +44,14 @@ const TODO_PRIORITY_LABELS: Record<number, string> = {
   [ToDoPriority.NoPriority]: 'NoPriority',
   [ToDoPriority.Urgent]: 'Urgent'
 }
+
+const TASK_STATUS_CATEGORY_LABELS = new Map<string, string>([
+  [task.statusCategory.UnStarted, 'Unstarted'],
+  [task.statusCategory.ToDo, 'To Do'],
+  [task.statusCategory.Active, 'Active'],
+  [task.statusCategory.Won, 'Won'],
+  [task.statusCategory.Lost, 'Lost']
+])
 
 const CARD_TYPE_LABELS = new Map<string, string>([
   [card.class.Card, 'Card'],
@@ -3604,6 +3612,46 @@ export async function deleteBoard(client: HulyClient, id: string): Promise<{ del
   return { deleted: true, id }
 }
 
+async function fetchBoardStatusMetadata(
+  client: HulyClient,
+  statusIds: string[]
+): Promise<{
+  statusNameById: Map<string, string>
+  statusCategoryIdById: Map<string, string | null>
+  statusCategoryNameById: Map<string, string>
+}> {
+  if (statusIds.length === 0) {
+    return {
+      statusNameById: new Map(),
+      statusCategoryIdById: new Map(),
+      statusCategoryNameById: new Map()
+    }
+  }
+
+  const statuses = await client.findAll('core:class:Status' as any, {
+    _id: { $in: statusIds as never[] }
+  }, {
+    limit: statusIds.length
+  })
+  const categoryIds = Array.from(new Set(
+    statuses
+      .map((status) => normalizeUnknownRef((status as any).category))
+      .filter((value): value is string => value !== null)
+  ))
+  const categories = categoryIds.length > 0
+    ? await client.findAll(core.class.StatusCategory as any, { _id: { $in: categoryIds as never[] } }, { limit: categoryIds.length })
+    : []
+
+  return {
+    statusNameById: new Map<string, string>(statuses.map((status) => [status._id as string, normalizeUnknownString((status as any).name) ?? status._id as string])),
+    statusCategoryIdById: new Map<string, string | null>(statuses.map((status) => [status._id as string, normalizeUnknownRef((status as any).category)])),
+    statusCategoryNameById: new Map<string, string>([
+      ...Array.from(TASK_STATUS_CATEGORY_LABELS.entries()),
+      ...categories.map((category) => [category._id as string, normalizeUnknownString((category as any).name) ?? TASK_STATUS_CATEGORY_LABELS.get(category._id as string) ?? category._id as string] as [string, string])
+    ])
+  }
+}
+
 async function mapBoardCardSummaries(
   client: HulyClient,
   cards: any[],
@@ -3617,11 +3665,17 @@ async function mapBoardCardSummaries(
       .filter((value): value is string => value !== null)
   ))
   const assigneeIds = cards.map((cardDoc) => normalizeUnknownRef(cardDoc.assignee))
-  const [boards, assigneeNames] = await Promise.all([
+  const statusIds = Array.from(new Set(
+    cards
+      .map((cardDoc) => normalizeUnknownString(cardDoc.status))
+      .filter((value): value is string => value !== null)
+  ))
+  const [boards, assigneeNames, statusMetadata] = await Promise.all([
     boardIds.length > 0
       ? client.findAll(board.class.Board as any, { _id: { $in: boardIds as never[] } }, { limit: boardIds.length })
       : Promise.resolve([]),
-    findPersonNames(client, assigneeIds)
+    findPersonNames(client, assigneeIds),
+    fetchBoardStatusMetadata(client, statusIds)
   ])
   const boardNameById = new Map<string, string>(boards.map((entry) => [entry._id as string, (entry as any).name as string]))
 
@@ -3635,6 +3689,8 @@ async function mapBoardCardSummaries(
 
   return await Promise.all(cards.map(async (cardDoc) => {
     const boardId = normalizeUnknownRef(cardDoc.attachedTo) ?? ''
+    const statusId = normalizeUnknownString(cardDoc.status)
+    const statusCategoryId = statusId ? statusMetadata.statusCategoryIdById.get(statusId) ?? null : null
 
     return {
       id: cardDoc._id,
@@ -3644,7 +3700,10 @@ async function mapBoardCardSummaries(
       description: options.includeDescription && cardDoc.description
         ? await client.fetchMarkup(board.class.Card as any, cardDoc._id, 'description', cardDoc.description as never, 'markdown')
         : null,
-      status: normalizeUnknownString(cardDoc.status),
+      status: statusId,
+      statusName: statusId ? statusMetadata.statusNameById.get(statusId) ?? statusId : null,
+      statusCategoryId,
+      statusCategory: statusCategoryId ? statusMetadata.statusCategoryNameById.get(statusCategoryId) ?? statusCategoryId : null,
       number: typeof cardDoc.number === 'number' ? cardDoc.number : null,
       assigneeId: normalizeUnknownRef(cardDoc.assignee),
       assigneeName: assigneeNames.get(cardDoc.assignee) ?? null,
@@ -3658,10 +3717,73 @@ async function mapBoardCardSummaries(
   }))
 }
 
+export async function listBoardColumns(
+  client: HulyClient,
+  options: {
+    boardId?: string
+    includeEmpty?: boolean
+  }
+): Promise<BoardColumnSummary[]> {
+  const query: Record<string, unknown> = {}
+
+  if (options.boardId !== undefined) {
+    query.attachedTo = (await getBoardById(client, options.boardId))._id
+  }
+
+  const cards = await client.findAll(board.class.Card as any, query as never, {
+    limit: 500,
+    sort: { modifiedOn: SortingOrder.Descending }
+  })
+  const summaries = await mapBoardCardSummaries(client, cards, { includeDescription: false })
+  const grouped = new Map<string, BoardColumnSummary>()
+
+  for (const summary of summaries) {
+    if (summary.status === null && options.includeEmpty === false) {
+      continue
+    }
+
+    const key = summary.boardId + '::' + (summary.status ?? '')
+    const existing = grouped.get(key)
+
+    if (existing) {
+      existing.cardCount += 1
+      continue
+    }
+
+    grouped.set(key, {
+      boardId: summary.boardId,
+      boardName: summary.boardName,
+      status: summary.status,
+      statusName: summary.statusName,
+      statusCategoryId: summary.statusCategoryId,
+      statusCategory: summary.statusCategory,
+      cardCount: 1
+    })
+  }
+
+  return Array.from(grouped.values()).sort((left, right) => {
+    const boardCompare = (left.boardName ?? left.boardId ?? '').localeCompare(right.boardName ?? right.boardId ?? '')
+    if (boardCompare !== 0) {
+      return boardCompare
+    }
+
+    if (left.status === null && right.status !== null) {
+      return -1
+    }
+
+    if (left.status !== null && right.status === null) {
+      return 1
+    }
+
+    return (left.statusName ?? left.status ?? '').localeCompare(right.statusName ?? right.status ?? '')
+  })
+}
+
 export async function listBoardCards(
   client: HulyClient,
   options: {
     boardId?: string
+    status?: string | null
     limit?: number
   }
 ): Promise<BoardCardSummary[]> {
@@ -3669,6 +3791,10 @@ export async function listBoardCards(
 
   if (options.boardId !== undefined) {
     query.attachedTo = (await getBoardById(client, options.boardId))._id
+  }
+
+  if (options.status !== undefined) {
+    query.status = options.status ?? ''
   }
 
   const cards = await client.findAll(board.class.Card as any, query as never, {
@@ -3690,6 +3816,7 @@ export async function createBoardCard(
     boardId: string
     title: string
     description?: string
+    status?: string
     location?: string
     startDate?: string
     dueDate?: string
@@ -3717,7 +3844,7 @@ export async function createBoardCard(
       title,
       description: options.description ? markdown(options.description) : '',
       kind: board.taskType.Card as any,
-      status: '',
+      status: options.status ? requireNonEmptyString(options.status, 'Board card status') : '',
       number: (typeof lastByNumber?.number === 'number' ? lastByNumber.number : 0) + 1,
       assignee: null,
       dueDate: options.dueDate ? Date.parse(options.dueDate) : null,
@@ -3741,6 +3868,7 @@ export async function updateBoardCard(
   updates: {
     title?: string
     description?: string
+    status?: string | null
     location?: string | null
     startDate?: string | null
     dueDate?: string | null
@@ -3756,6 +3884,10 @@ export async function updateBoardCard(
 
   if (updates.description !== undefined) {
     operations.description = updates.description ? markdown(updates.description) : ''
+  }
+
+  if (updates.status !== undefined) {
+    operations.status = updates.status === null ? '' : requireNonEmptyString(updates.status, 'Board card status')
   }
 
   if (updates.location !== undefined) {
@@ -4019,6 +4151,48 @@ export async function updateDriveFile(client: HulyClient, id: string, updates: {
 
 export async function deleteDriveFile(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
   return await deleteDriveResource(client, DRIVE_FILE_CLASS, id)
+}
+
+function mapDriveActivitySummary(entry: any): DriveActivitySummary {
+  return {
+    id: entry._id,
+    action: normalizeUnknownString(entry.action) ?? String(entry.action ?? ''),
+    attachedTo: normalizeUnknownRef(entry.attachedTo),
+    attachedToClass: normalizeUnknownRef(entry.attachedToClass),
+    objectId: normalizeUnknownRef(entry.objectId),
+    objectClass: normalizeUnknownRef(entry.objectClass),
+    collection: normalizeUnknownString(entry.collection),
+    txId: normalizeUnknownRef(entry.txId),
+    createdOn: timestampToIso(entry.createdOn),
+    modifiedOn: timestampToIso(entry.modifiedOn),
+    modifiedBy: normalizeUnknownString(entry.modifiedBy)
+  }
+}
+
+async function listDriveResourceActivity(
+  client: HulyClient,
+  className: string,
+  id: string,
+  limit?: number
+): Promise<DriveActivitySummary[]> {
+  const entry = await getDriveResourceById(client, className, id)
+  const messages = await client.findAll('activity:class:DocUpdateMessage' as any, {
+    attachedTo: entry._id as never,
+    attachedToClass: className as never
+  }, {
+    limit: limit ?? 20,
+    sort: { createdOn: SortingOrder.Descending }
+  })
+
+  return messages.map((message) => mapDriveActivitySummary(message))
+}
+
+export async function listDriveFolderActivity(client: HulyClient, id: string, limit?: number): Promise<DriveActivitySummary[]> {
+  return await listDriveResourceActivity(client, DRIVE_FOLDER_CLASS, id, limit)
+}
+
+export async function listDriveFileActivity(client: HulyClient, id: string, limit?: number): Promise<DriveActivitySummary[]> {
+  return await listDriveResourceActivity(client, DRIVE_FILE_CLASS, id, limit)
 }
 
 async function getHrDepartmentById(client: HulyClient, id: string): Promise<any> {

@@ -365,6 +365,9 @@ export type BoardCardSummary = {
   title: string
   description: string | null
   status: string | null
+  statusName: string | null
+  statusCategoryId: string | null
+  statusCategory: string | null
   number: number | null
   assigneeId: string | null
   assigneeName: string | null
@@ -374,6 +377,16 @@ export type BoardCardSummary = {
   archived: boolean
   createdOn: string | null
   modifiedOn: string | null
+}
+
+export type BoardColumnSummary = {
+  boardId: string | null
+  boardName: string | null
+  status: string | null
+  statusName: string | null
+  statusCategoryId: string | null
+  statusCategory: string | null
+  cardCount: number
 }
 
 export type DriveSummary = {
@@ -395,6 +408,20 @@ export type DriveResourceSummary = {
   docUpdateMessages: number | null
   createdOn: string | null
   modifiedOn: string | null
+}
+
+export type DriveActivitySummary = {
+  id: string
+  action: 'create' | 'update' | 'remove' | string
+  attachedTo: string | null
+  attachedToClass: string | null
+  objectId: string | null
+  objectClass: string | null
+  collection: string | null
+  txId: string | null
+  createdOn: string | null
+  modifiedOn: string | null
+  modifiedBy: string | null
 }
 
 export type HrDepartmentSummary = {

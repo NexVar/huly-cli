@@ -165,8 +165,29 @@ test('main returns JSON for board help', async () => {
   assert.equal(payload.data.command, 'board')
   assert.ok(payload.data.commands.some((command) => command.name === 'list'))
   assert.ok(payload.data.commands.some((command) => command.name === 'card'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'column'))
   assert.ok(payload.data.commands.some((command) => command.name === 'create'))
   assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
+})
+
+test('main returns JSON for board column help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'board', 'column', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'column')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
 })
 
 test('main returns JSON for board card help', async () => {
@@ -305,6 +326,30 @@ test('main returns JSON for drive folder help', async () => {
   assert.equal(payload.data.command, 'folder')
   assert.ok(payload.data.commands.some((command) => command.name === 'list'))
   assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'activity'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
+})
+
+test('main returns JSON for drive file help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'drive', 'file', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'file')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'activity'))
   assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
 })
 
