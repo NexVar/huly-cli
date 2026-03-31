@@ -37,7 +37,7 @@ Additional implemented commands:
 - `board list|get|create|update|delete`
 - `board column list`
 - `board card list|get|create|update|move|delete`
-- `card types|type list|get|create|update|delete|role list|get|create|update|delete|list|get|create|update|delete`
+- `card types|type list|get|create|update|delete|role list|get|create|update|delete|list|get|create|update|move|delete`
 - `drive list|get|create|update|delete`
 - `drive folder list|get|create|update|delete|activity`
 - `drive file list|get|create|update|delete|activity`
@@ -74,8 +74,9 @@ Current `card` scope:
 - `card` currently manages cards in Huly's default card space, custom card type CRUD, and attached role CRUD for workspace-defined types.
 - Built-in card types remain readable but intentionally read-only. Custom `card type` and `card role` writes are smoke-tested live.
 - Custom `card type create|update` now support `color`, `background`, and `removed` metadata on workspace-defined types.
+- Generic cards now support parent assignment on create, parent changes through `card update --parent|--clear-parent`, root filtering through `card list --root`, and sibling reordering through `card move --before|--after|--top|--bottom`.
 - The smoke-tested card create/update/delete path still uses the generic `Card` type. Other workspace-specific card types are discoverable and targetable, but some may have stricter backend behavior.
-- Broader card-schema work from the long-term PRD, such as arbitrary attributes and richer relation semantics, is still pending.
+- Broader card-schema work from the long-term PRD, such as arbitrary attributes and richer relation semantics beyond parent/rank workflows, is still pending.
 
 Current `chat` scope:
 
@@ -95,7 +96,7 @@ Current `board` / `drive` scope:
 
 - `board` supports list|get|create|update|delete against workspace spaces, `board column list` as a read-only view of live card-status groupings, and `board card list|get|create|update|move|delete` for board-attached cards.
 - Board-card writes use the verified attached-document path on `board.class.Board -> cards`, with markdown description support and start/due date, location, archive-state updates, assignee round-tripping through person ids, status round-tripping through Huly status refs, and explicit rank-based reordering.
-- `board card list` supports status and assignee filtering, returns rank-ordered cards when scoped to a board, `board card create|update` support explicit status ids and assignee person ids, `board card move` supports before/after/top/bottom ordering, and `board column list` groups current cards by status with friendly status/category names when the referenced model status exists.
+- `board card list` supports status and assignee filtering, returns rank-ordered cards when scoped to a board, `board card create|update` support explicit status ids and assignee person ids, `board card update` clears location/start-date/due-date through Commander-safe `--no-*` handling, `board card move` supports before/after/top/bottom ordering, and `board column list` groups current cards by status with friendly status/category names when the referenced model status exists.
 - `drive` supports both workspace drive spaces and lightweight folder/file record CRUD through backend document refs, plus read-only activity history for folder/file doc updates, all smoke-tested live with disposable resources and cleanup.
 - `drive file activity` and `drive folder activity` read attached `activity:class:DocUpdateMessage` entries, which gives a safe verified history surface even though full drive-content/blob workflows are still not implemented.
 - `drive` currently targets backend document refs directly because the drive npm package is not published on npm even though the backend namespace exists and is usable live.
@@ -103,20 +104,20 @@ Current `board` / `drive` scope:
 Current `hr` scope:
 
 - `hr` currently supports department CRUD, employee list|get, public-holiday CRUD, request-type list, and request list|get|create|update|delete.
-- Public holiday CRUD uses the published HR package model in `core:space:Workspace`; create defaults to `hr:ids:Head` when `--department` is omitted. Request creation uses the correct attached-doc path and defaults to the current authenticated member when `--employee` is omitted.
-- These flows were smoke-tested live against the current workspace, including request type resolution and cleanup.
+- Public holiday CRUD uses the published HR package model in `core:space:Workspace`; create defaults to `hr:ids:Head` when `--department` is omitted. Request creation uses the correct attached-doc path and defaults to the current authenticated member when `--employee` is omitted. Request update now supports `--clear-due-date`.
+- Department update now safely clears parent and team lead through Commander-safe `--no-parent` and `--no-team-lead` handling. These flows were smoke-tested live against the current workspace, including request type resolution and cleanup.
 
 Current `recruit` scope:
 
 - `recruit` currently supports vacancy CRUD, applicant-status list, applicant list|get|create|update|delete, candidate list|get|create|update|delete, review list|get|create|update|delete, and opinion list|get|create|update|delete.
-- Vacancy, applicant, review, and opinion writes use backend-validated payload shapes discovered through live smoke rather than guessed package-level abstractions. Review creation follows Huly's calendar-event payload requirements, and opinion CRUD uses the verified `Review -> opinions` attached collection path.
-- Applicant statuses are resolved from the published recruit task type instead of hard-coded display labels. Candidate CRUD is implemented by creating/updating contact persons with the recruit candidate mixin.
-- Review and opinion descriptions use the shared markup update path that was already fixed for other markdown-backed entities, so description create/update round-trips are verified live.
+- Vacancy, applicant, review, and opinion writes use backend-validated payload shapes discovered through live smoke rather than guessed package-level abstractions. Vacancy update now round-trips `fullDescription` and supports `--clear-full-description`, `--clear-location`, and `--clear-due-date`. Review creation follows Huly's calendar-event payload requirements, and opinion CRUD uses the verified `Review -> opinions` attached collection path.
+- Applicant statuses are resolved from the published recruit task type instead of hard-coded display labels, applicant list supports vacancy, status, assignee, and unassigned filtering for lifecycle automation, and applicant update now safely clears assignee/start-date/due-date through Commander-safe `--no-*` handling. Candidate CRUD is implemented by creating/updating contact persons with the recruit candidate mixin.
+- Review and opinion descriptions use the shared markup update path that was already fixed for other markdown-backed entities, so description create/update round-trips are verified live. Review due dates remain settable but do not expose a clear flag yet, because a live null-update probe kept the previous backend value.
 
 Verification snapshot:
 
 - Local verification: `npm run build`, `npm test`
-- Live verification: built CLI auth via token, board-card CRUD plus status/column/assignee/move flows, drive file activity/history, and recruit candidate/review/opinion CRUD with cleanup
+- Live verification: built CLI auth via token, board-card CRUD plus status/column/assignee/move/clear flows, card parent/move flows, drive file activity/history, hr department clear-parent/team-lead flows, hr request clear-due-date flows, recruit vacancy full-description/clear flows, recruit applicant filter/clear flows, and recruit candidate/review/opinion CRUD with cleanup
 - The README reflects verified commands only. Broader PRD parity work is still in progress.
 
 ## Install
@@ -329,13 +330,19 @@ npm run dev -- board card move <card-id> --after <other-card-id>
 npm run dev -- board card update <card-id> --clear-status
 ```
 
-Create a card:
+Create and reorganize cards:
 
 ```bash
 npm run dev -- card create \
-  --title "CLI card" \
-  --type Card \
-  --content "# Card body"
+  --title "Parent card"
+npm run dev -- card create \
+  --title "Child card" \
+  --parent <parent-card-id>
+npm run dev -- card list --parent <parent-card-id>
+npm run dev -- card update <card-id> --clear-parent
+npm run dev -- card update <card-id> --parent <new-parent-card-id>
+npm run dev -- card move <card-id> --top
+npm run dev -- card move <card-id> --after <sibling-card-id>
 ```
 
 Manage channel members:

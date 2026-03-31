@@ -2439,6 +2439,49 @@ async function resolveCardType(client: HulyClient, value: string | undefined): P
   throw new CliError('NOT_FOUND', `Card type '${value}' not found`, 3)
 }
 
+function buildCardParentInfo(parent: HulyCard | null): Array<{ _id: string, _class: string, title: string }> {
+  return parent
+    ? [...(parent.parentInfo ?? []), { _id: parent._id, _class: parent._class, title: parent.title }]
+    : []
+}
+
+async function resolveCardParentChange(
+  client: HulyClient,
+  cardDoc: HulyCard,
+  parentId: string | null
+): Promise<{ parent: string | null, parentInfo: Array<{ _id: string, _class: string, title: string }>, rank: string } | undefined> {
+  const currentParentId = cardDoc.parent ?? null
+
+  if (currentParentId === parentId) {
+    return undefined
+  }
+
+  const parent = parentId ? await getCardById(client, parentId) : null
+
+  if (parent && parent._id === cardDoc._id) {
+    throw new CliError('VALIDATION_ERROR', 'Card cannot be its own parent.', 4)
+  }
+
+  if (parent && (parent.parentInfo ?? []).some((entry) => entry._id === cardDoc._id)) {
+    throw new CliError('VALIDATION_ERROR', 'Card cannot be moved under one of its descendants.', 4)
+  }
+
+  const siblings = await client.findAll(card.class.Card, {
+    space: card.space.Default,
+    parent: parent?._id ?? null
+  } as never, {
+    limit: 5000,
+    sort: { rank: SortingOrder.Descending }
+  })
+  const lastSibling = siblings.find((entry) => entry._id !== cardDoc._id)
+
+  return {
+    parent: parent?._id ?? null,
+    parentInfo: buildCardParentInfo(parent),
+    rank: makeRank(lastSibling?.rank, undefined)
+  }
+}
+
 async function mapCards(
   client: HulyClient,
   cards: HulyCard[],
@@ -2699,7 +2742,7 @@ export async function listCards(
   client: HulyClient,
   options: {
     type?: string
-    parentId?: string
+    parentId?: string | null
     limit?: number
   }
 ): Promise<CardSummary[]> {
@@ -2712,12 +2755,14 @@ export async function listCards(
   }
 
   if (options.parentId !== undefined) {
-    query.parent = (await getCardById(client, options.parentId))._id
+    query.parent = options.parentId === null ? null : (await getCardById(client, options.parentId))._id
   }
 
   const cards = await client.findAll(card.class.Card, query as never, {
     limit: options.limit ?? 20,
-    sort: { modifiedOn: SortingOrder.Descending }
+    sort: options.parentId !== undefined
+      ? { rank: SortingOrder.Ascending }
+      : { modifiedOn: SortingOrder.Descending }
   })
 
   return await mapCards(client, cards, { includeContent: false })
@@ -2747,9 +2792,7 @@ export async function createCard(
   const lastCard = await client.findOne(card.class.Card, siblingsQuery as never, {
     sort: { rank: SortingOrder.Descending }
   })
-  const parentInfo = parent
-    ? [...(parent.parentInfo ?? []), { _id: parent._id, _class: parent._class, title: parent.title }]
-    : []
+  const parentInfo = buildCardParentInfo(parent)
 
   const id = await client.createDoc(
     cardClass as Ref<Class<HulyCard>>,
@@ -2779,6 +2822,7 @@ export async function updateCard(
   updates: {
     title?: string
     content?: string
+    parentId?: string | null
     readonly?: boolean
   }
 ): Promise<CardSummary> {
@@ -2791,6 +2835,16 @@ export async function updateCard(
 
   if (updates.content !== undefined) {
     operations.content = markdown(updates.content)
+  }
+
+  if (updates.parentId !== undefined) {
+    const parentChange = await resolveCardParentChange(client, cardDoc, updates.parentId)
+
+    if (parentChange) {
+      operations.parent = parentChange.parent
+      operations.parentInfo = parentChange.parentInfo
+      operations.rank = parentChange.rank
+    }
   }
 
   if (updates.readonly !== undefined) {
@@ -2813,6 +2867,87 @@ export async function updateCard(
     }
   }
 
+  return await getCardSummary(client, id)
+}
+
+export async function moveCard(
+  client: HulyClient,
+  id: string,
+  options: {
+    beforeId?: string
+    afterId?: string
+    top?: boolean
+    bottom?: boolean
+  }
+): Promise<CardSummary> {
+  const cardDoc = await getCardById(client, id)
+  const parentId = cardDoc.parent ?? null
+  const siblings = await client.findAll(card.class.Card, {
+    space: card.space.Default,
+    parent: parentId
+  } as never, {
+    limit: 5000,
+    sort: { rank: SortingOrder.Ascending }
+  })
+  const siblingCards = siblings.filter((entry) => entry._id !== cardDoc._id)
+
+  const getRank = (entry: HulyCard, label: string): string => {
+    if (!entry.rank) {
+      throw new CliError('VALIDATION_ERROR', label + ' has no rank.', 4)
+    }
+
+    return entry.rank
+  }
+
+  let nextRank: string
+
+  if (options.beforeId !== undefined) {
+    if (options.beforeId === id) {
+      throw new CliError('VALIDATION_ERROR', 'Use a different card id for --before.', 4)
+    }
+
+    const target = await getCardById(client, options.beforeId)
+    if ((target.parent ?? null) !== parentId) {
+      throw new CliError('VALIDATION_ERROR', 'The --before card must belong to the same parent.', 4)
+    }
+
+    const targetIndex = siblingCards.findIndex((entry) => entry._id === target._id)
+    if (targetIndex === -1) {
+      throw new CliError('VALIDATION_ERROR', 'The --before card is outside the current sibling ordering window.', 4)
+    }
+
+    const previous = targetIndex > 0 ? siblingCards[targetIndex - 1] : undefined
+    nextRank = makeRank(previous ? getRank(previous, 'The previous sibling card') : undefined, getRank(target, 'The --before card'))
+  } else if (options.afterId !== undefined) {
+    if (options.afterId === id) {
+      throw new CliError('VALIDATION_ERROR', 'Use a different card id for --after.', 4)
+    }
+
+    const target = await getCardById(client, options.afterId)
+    if ((target.parent ?? null) !== parentId) {
+      throw new CliError('VALIDATION_ERROR', 'The --after card must belong to the same parent.', 4)
+    }
+
+    const targetIndex = siblingCards.findIndex((entry) => entry._id === target._id)
+    if (targetIndex === -1) {
+      throw new CliError('VALIDATION_ERROR', 'The --after card is outside the current sibling ordering window.', 4)
+    }
+
+    const next = targetIndex < siblingCards.length - 1 ? siblingCards[targetIndex + 1] : undefined
+    nextRank = makeRank(getRank(target, 'The --after card'), next ? getRank(next, 'The next sibling card') : undefined)
+  } else if (options.top) {
+    nextRank = siblingCards.length === 0
+      ? makeRank(undefined, undefined)
+      : makeRank(undefined, getRank(siblingCards[0], 'The top sibling card'))
+  } else if (options.bottom) {
+    nextRank = siblingCards.length === 0
+      ? makeRank(undefined, undefined)
+      : makeRank(getRank(siblingCards[siblingCards.length - 1], 'The bottom sibling card'), undefined)
+  } else {
+    throw new CliError('VALIDATION_ERROR', 'Provide a move target.', 4)
+  }
+
+  await client.updateDoc(cardDoc._class as Ref<Class<HulyCard>>, cardDoc.space, cardDoc._id, { rank: nextRank } as never)
   return await getCardSummary(client, id)
 }
 
@@ -4675,7 +4810,7 @@ export async function updateHrRequest(
     typeId?: string
     description?: string
     date?: string
-    dueDate?: string
+    dueDate?: string | null
   }
 ): Promise<HrRequestSummary> {
   const request = await getHrRequestById(client, id)
@@ -4698,7 +4833,7 @@ export async function updateHrRequest(
   }
 
   if (updates.dueDate !== undefined) {
-    operations.tzDueDate = isoToTzDate(updates.dueDate)
+    operations.tzDueDate = updates.dueDate === null ? null : isoToTzDate(updates.dueDate)
   }
 
   if (Object.keys(operations).length === 0) {
@@ -4791,8 +4926,9 @@ export async function updateRecruitVacancy(
   updates: {
     name?: string
     description?: string
-    location?: string
-    dueDate?: string
+    fullDescription?: string | null
+    location?: string | null
+    dueDate?: string | null
     private?: boolean
     archived?: boolean
   }
@@ -4808,12 +4944,16 @@ export async function updateRecruitVacancy(
     operations.description = updates.description
   }
 
+  if (updates.fullDescription !== undefined) {
+    operations.fullDescription = updates.fullDescription === null ? null : markdown(updates.fullDescription)
+  }
+
   if (updates.location !== undefined) {
-    operations.location = updates.location
+    operations.location = updates.location ?? ''
   }
 
   if (updates.dueDate !== undefined) {
-    operations.dueTo = new Date(updates.dueDate).getTime()
+    operations.dueTo = updates.dueDate === null ? null : new Date(updates.dueDate).getTime()
   }
 
   if (updates.private !== undefined) {
@@ -4876,7 +5016,8 @@ export async function listRecruitApplicantStatuses(client: HulyClient): Promise<
 }
 
 async function resolveRecruitApplicantStatus(client: HulyClient, value: string): Promise<string> {
-  const status = (await listRecruitApplicantStatuses(client)).find((entry) => normalizeString(entry.name) === normalizeString(value))
+  const statuses = await listRecruitApplicantStatuses(client)
+  const status = statuses.find((entry) => entry.id === value || normalizeString(entry.name) === normalizeString(value))
 
   if (!status) {
     throw new CliError('NOT_FOUND', `Recruit applicant status '${value}' not found`, 3)
@@ -4912,12 +5053,34 @@ async function mapRecruitApplicantSummary(client: HulyClient, applicant: any): P
   }
 }
 
-export async function listRecruitApplicants(client: HulyClient, vacancyId?: string): Promise<RecruitApplicantSummary[]> {
+export async function listRecruitApplicants(
+  client: HulyClient,
+  options: {
+    vacancyId?: string
+    status?: string
+    assigneeId?: string | null
+    limit?: number
+  } = {}
+): Promise<RecruitApplicantSummary[]> {
+  const query: Record<string, unknown> = {}
+
+  if (options.vacancyId) {
+    query.attachedTo = (await getRecruitVacancyById(client, options.vacancyId))._id
+  }
+
+  if (options.status !== undefined) {
+    query.status = await resolveRecruitApplicantStatus(client, options.status)
+  }
+
+  if (options.assigneeId !== undefined) {
+    query.assignee = options.assigneeId === null ? null : (await getPersonById(client, options.assigneeId))._id
+  }
+
   const applicants = await client.findAll(
     RECRUIT_APPLICANT_CLASS as any,
-    vacancyId ? { attachedTo: vacancyId as never } : {},
+    query as never,
     {
-      limit: 100,
+      limit: options.limit ?? 100,
       sort: { createdOn: SortingOrder.Descending }
     }
   )

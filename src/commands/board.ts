@@ -3,6 +3,7 @@ import { handleCommand } from '../lib/command'
 import { withClient } from '../lib/client'
 import { readTextOption } from '../lib/files'
 import { createBoard, createBoardCard, deleteBoard, deleteBoardCard, getBoardCardSummary, getBoardSummary, listBoardCards, listBoardColumns, listBoards, moveBoardCard, updateBoard, updateBoardCard } from '../lib/huly'
+import { resolveNullableStringOption } from '../lib/options'
 import { CliError } from '../lib/output'
 
 type BoardCreateOptions = {
@@ -55,12 +56,9 @@ type BoardCardUpdateOptions = {
   clearStatus?: boolean
   assignee?: string
   clearAssignee?: boolean
-  location?: string
-  noLocation?: boolean
-  startDate?: string
-  noStartDate?: boolean
-  dueDate?: string
-  noDueDate?: boolean
+  location?: string | false
+  startDate?: string | false
+  dueDate?: string | false
   archive?: boolean
   unarchive?: boolean
 }
@@ -129,33 +127,12 @@ function parseIsoDate(value: string | undefined, flagName: string): string | und
   return value
 }
 
-function resolveNullableValue(
-  value: string | undefined,
-  cleared: boolean | undefined,
-  label: string,
-  clearedLabel?: string
-): string | null | undefined {
-  if (value !== undefined && cleared) {
-    throw new CliError(
-      'VALIDATION_ERROR',
-      'Use only one of --' + label + ' or --' + (clearedLabel ?? ('no-' + label)) + '.',
-      4
-    )
-  }
-
-  if (cleared) {
-    return null
-  }
-
-  return value
-}
-
 function resolveStatusFilter(options: BoardCardListOptions): string | null | undefined {
-  return resolveNullableValue(options.status, options.withoutStatus, 'status', 'without-status')
+  return resolveNullableStringOption(options.status, options.withoutStatus, 'status', 'without-status')
 }
 
 function resolveAssigneeFilter(options: BoardCardListOptions): string | null | undefined {
-  return resolveNullableValue(options.assignee, options.withoutAssignee, 'assignee', 'without-assignee')
+  return resolveNullableStringOption(options.assignee, options.withoutAssignee, 'assignee', 'without-assignee')
 }
 
 function resolveBoardCardMove(options: BoardCardMoveOptions): { beforeId?: string, afterId?: string, top?: boolean, bottom?: boolean } {
@@ -332,11 +309,19 @@ export function registerBoardCommands(program: Command): void {
     return await withClient(async (client) => await updateBoardCard(client, id, {
       title: options.title,
       description,
-      status: resolveNullableValue(options.status, options.clearStatus, 'status', 'clear-status'),
-      assigneeId: resolveNullableValue(options.assignee, options.clearAssignee, 'assignee', 'clear-assignee'),
-      location: resolveNullableValue(options.location, options.noLocation, 'location'),
-      startDate: resolveNullableValue(parseIsoDate(options.startDate, '--start-date'), options.noStartDate, 'start-date'),
-      dueDate: resolveNullableValue(parseIsoDate(options.dueDate, '--due-date'), options.noDueDate, 'due-date'),
+      status: resolveNullableStringOption(options.status, options.clearStatus, 'status', 'clear-status'),
+      assigneeId: resolveNullableStringOption(options.assignee, options.clearAssignee, 'assignee', 'clear-assignee'),
+      location: resolveNullableStringOption(options.location, undefined, 'location'),
+      startDate: resolveNullableStringOption(
+        options.startDate === false ? false : parseIsoDate(options.startDate, '--start-date'),
+        undefined,
+        'start-date'
+      ),
+      dueDate: resolveNullableStringOption(
+        options.dueDate === false ? false : parseIsoDate(options.dueDate, '--due-date'),
+        undefined,
+        'due-date'
+      ),
       archived: resolveArchived(options)
     }))
   })

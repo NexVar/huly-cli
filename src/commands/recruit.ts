@@ -30,6 +30,7 @@ import {
   updateRecruitReview,
   updateRecruitVacancy
 } from '../lib/huly'
+import { resolveNullableStringOption } from '../lib/options'
 import { CliError } from '../lib/output'
 
 type RecruitVacancyCreateOptions = {
@@ -45,8 +46,13 @@ type RecruitVacancyCreateOptions = {
 type RecruitVacancyUpdateOptions = {
   name?: string
   description?: string
+  fullDescription?: string
+  fullDescriptionFile?: string
+  clearFullDescription?: boolean
   location?: string
+  clearLocation?: boolean
   dueDate?: string
+  clearDueDate?: boolean
   private?: boolean
   public?: boolean
   archive?: boolean
@@ -55,6 +61,10 @@ type RecruitVacancyUpdateOptions = {
 
 type RecruitApplicantListOptions = {
   vacancy?: string
+  status?: string
+  assignee?: string
+  withoutAssignee?: boolean
+  limit?: string
 }
 
 type RecruitApplicantCreateOptions = {
@@ -69,12 +79,9 @@ type RecruitApplicantCreateOptions = {
 type RecruitApplicantUpdateOptions = {
   identifier?: string
   status?: string
-  assignee?: string
-  noAssignee?: boolean
-  startDate?: string
-  noStartDate?: boolean
-  dueDate?: string
-  noDueDate?: boolean
+  assignee?: string | false
+  startDate?: string | false
+  dueDate?: string | false
 }
 
 type RecruitCandidateCreateOptions = {
@@ -118,12 +125,10 @@ type RecruitReviewUpdateOptions = {
   verdict?: string
   description?: string
   descriptionFile?: string
-  location?: string
-  noLocation?: boolean
+  location?: string | false
   date?: string
   dueDate?: string
-  applicant?: string
-  noApplicant?: boolean
+  applicant?: string | false
 }
 
 type RecruitOpinionListOptions = {
@@ -201,16 +206,8 @@ function parseLimit(limit: string | undefined): number | undefined {
   return parsed
 }
 
-function resolveNullableValue(value: string | undefined, cleared: boolean | undefined, label: string): string | null | undefined {
-  if (value !== undefined && cleared) {
-    throw new CliError('VALIDATION_ERROR', 'Use only one of --' + label + ' or --no-' + label + '.', 4)
-  }
-
-  if (cleared) {
-    return null
-  }
-
-  return value
+function resolveApplicantAssigneeFilter(options: RecruitApplicantListOptions): string | null | undefined {
+  return resolveNullableStringOption(options.assignee, options.withoutAssignee, 'assignee', 'without-assignee')
 }
 
 export function registerRecruitCommands(program: Command): void {
@@ -261,19 +258,32 @@ export function registerRecruitCommands(program: Command): void {
     .argument('<id>', 'Vacancy id')
     .option('--name <name>', 'Vacancy name')
     .option('--description <text>', 'Vacancy description')
+    .option('--full-description <markdown>', 'Vacancy full description markdown')
+    .option('--full-description-file <path>', 'Read vacancy full description markdown from a file')
+    .option('--clear-full-description', 'Remove the vacancy full description')
     .option('--location <text>', 'Vacancy location')
+    .option('--clear-location', 'Remove the vacancy location')
     .option('--due-date <date>', 'Vacancy due date in ISO-8601 format')
+    .option('--clear-due-date', 'Remove the vacancy due date')
     .option('--private', 'Set the vacancy to private')
     .option('--public', 'Set the vacancy to public')
     .option('--archive', 'Archive the vacancy')
     .option('--unarchive', 'Unarchive the vacancy')
 
   handleCommand(vacancyUpdate, async (id: string, options: RecruitVacancyUpdateOptions) => {
+    const fullDescription = await readTextOption(options.fullDescription, options.fullDescriptionFile, 'full-description')
+
     return await withClient(async (client) => await updateRecruitVacancy(client, id, {
       name: options.name,
       description: options.description,
-      location: options.location,
-      dueDate: parseIsoDate(options.dueDate, '--due-date'),
+      fullDescription: resolveNullableStringOption(fullDescription, options.clearFullDescription, 'full-description', 'clear-full-description'),
+      location: resolveNullableStringOption(options.location, options.clearLocation, 'location', 'clear-location'),
+      dueDate: resolveNullableStringOption(
+        parseIsoDate(options.dueDate, '--due-date'),
+        options.clearDueDate,
+        'due-date',
+        'clear-due-date'
+      ),
       private: resolvePrivate(options),
       archived: resolveArchived(options)
     }))
@@ -300,9 +310,18 @@ export function registerRecruitCommands(program: Command): void {
     .command('list')
     .description('List applicants')
     .option('--vacancy <id>', 'Filter by vacancy id')
+    .option('--status <status>', 'Filter by applicant status name or id')
+    .option('--assignee <id>', 'Filter by assignee person id')
+    .option('--without-assignee', 'Filter to applicants without an assignee')
+    .option('--limit <n>', 'Maximum number of applicants')
 
   handleCommand(applicantList, async (options: RecruitApplicantListOptions) => {
-    return await withClient(async (client) => await listRecruitApplicants(client, options.vacancy))
+    return await withClient(async (client) => await listRecruitApplicants(client, {
+      vacancyId: options.vacancy,
+      status: options.status,
+      assigneeId: resolveApplicantAssigneeFilter(options),
+      limit: parseLimit(options.limit)
+    }))
   })
 
   const applicantGet = applicant
@@ -346,13 +365,21 @@ export function registerRecruitCommands(program: Command): void {
     .option('--due-date <date>', 'Due date in ISO-8601 format')
     .option('--no-due-date', 'Remove the due date')
 
-  handleCommand(applicantUpdate, async (id: string, options: RecruitApplicantUpdateOptions & { noAssignee?: boolean, noStartDate?: boolean, noDueDate?: boolean }) => {
+  handleCommand(applicantUpdate, async (id: string, options: RecruitApplicantUpdateOptions) => {
     return await withClient(async (client) => await updateRecruitApplicant(client, id, {
       identifier: options.identifier,
       status: options.status,
-      assigneeId: resolveNullableValue(options.assignee, options.noAssignee, 'assignee'),
-      startDate: resolveNullableValue(parseIsoDate(options.startDate, '--start-date'), options.noStartDate, 'start-date'),
-      dueDate: resolveNullableValue(parseIsoDate(options.dueDate, '--due-date'), options.noDueDate, 'due-date')
+      assigneeId: resolveNullableStringOption(options.assignee, undefined, 'assignee'),
+      startDate: resolveNullableStringOption(
+        options.startDate === false ? false : parseIsoDate(options.startDate, '--start-date'),
+        undefined,
+        'start-date'
+      ),
+      dueDate: resolveNullableStringOption(
+        options.dueDate === false ? false : parseIsoDate(options.dueDate, '--due-date'),
+        undefined,
+        'due-date'
+      )
     }))
   })
 
@@ -488,10 +515,10 @@ export function registerRecruitCommands(program: Command): void {
       title: options.title,
       verdict: options.verdict,
       description,
-      location: resolveNullableValue(options.location, options.noLocation, 'location'),
+      location: resolveNullableStringOption(options.location, undefined, 'location'),
       date: parseIsoDate(options.date, '--date'),
       dueDate: parseIsoDate(options.dueDate, '--due-date'),
-      applicantId: resolveNullableValue(options.applicant, options.noApplicant, 'applicant')
+      applicantId: resolveNullableStringOption(options.applicant, undefined, 'applicant')
     }))
   })
 

@@ -21,6 +21,7 @@ import {
   updateHrPublicHoliday,
   updateHrRequest
 } from '../lib/huly'
+import { resolveNullableStringOption } from '../lib/options'
 import { CliError } from '../lib/output'
 
 type HrEmployeeListOptions = {
@@ -37,10 +38,8 @@ type HrDepartmentCreateOptions = {
 type HrDepartmentUpdateOptions = {
   name?: string
   description?: string
-  parent?: string
-  noParent?: boolean
-  teamLead?: string
-  noTeamLead?: boolean
+  parent?: string | false
+  teamLead?: string | false
 }
 
 type HrRequestListOptions = {
@@ -62,6 +61,7 @@ type HrRequestUpdateOptions = {
   description?: string
   date?: string
   dueDate?: string
+  clearDueDate?: boolean
 }
 
 type HrPublicHolidayListOptions = {
@@ -102,18 +102,6 @@ function parseIsoDate(value: string | undefined, flagName: string): string | und
 
   if (Number.isNaN(new Date(value).getTime())) {
     throw new CliError('VALIDATION_ERROR', `Invalid ${flagName} value: ${value}`, 4)
-  }
-
-  return value
-}
-
-function resolveNullableValue(value: string | undefined, cleared: boolean | undefined, label: string): string | null | undefined {
-  if (value !== undefined && cleared) {
-    throw new CliError('VALIDATION_ERROR', `Use only one of --${label} or --no-${label}.`, 4)
-  }
-
-  if (cleared) {
-    return null
   }
 
   return value
@@ -165,12 +153,12 @@ export function registerHrCommands(program: Command): void {
     .option('--team-lead <id>', 'Team lead person id')
     .option('--no-team-lead', 'Remove the team lead')
 
-  handleCommand(departmentUpdate, async (id: string, options: HrDepartmentUpdateOptions & { parent?: string, teamLead?: string, noParent?: boolean, noTeamLead?: boolean }) => {
+  handleCommand(departmentUpdate, async (id: string, options: HrDepartmentUpdateOptions) => {
     return await withClient(async (client) => await updateHrDepartment(client, id, {
       name: options.name,
       description: options.description,
-      parent: resolveNullableValue(options.parent, options.noParent, 'parent'),
-      teamLead: resolveNullableValue(options.teamLead, options.noTeamLead, 'team-lead')
+      parent: resolveNullableStringOption(options.parent, undefined, 'parent'),
+      teamLead: resolveNullableStringOption(options.teamLead, undefined, 'team-lead')
     }))
   })
 
@@ -315,6 +303,7 @@ export function registerHrCommands(program: Command): void {
     .option('--description <text>', 'Request description')
     .option('--date <date>', 'Request date in ISO-8601 format')
     .option('--due-date <date>', 'Due date in ISO-8601 format')
+    .option('--clear-due-date', 'Remove the due date')
 
   handleCommand(requestUpdate, async (id: string, options: HrRequestUpdateOptions) => {
     return await withClient(async (client) => await updateHrRequest(client, id, {
@@ -322,7 +311,12 @@ export function registerHrCommands(program: Command): void {
       typeId: options.type,
       description: options.description,
       date: parseIsoDate(options.date, '--date'),
-      dueDate: parseIsoDate(options.dueDate, '--due-date')
+      dueDate: resolveNullableStringOption(
+        parseIsoDate(options.dueDate, '--due-date'),
+        options.clearDueDate,
+        'due-date',
+        'clear-due-date'
+      )
     }))
   })
 

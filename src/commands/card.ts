@@ -15,6 +15,7 @@ import {
   listCardRoles,
   listCards,
   listCardTypes,
+  moveCard,
   updateCard,
   updateCardRole,
   updateCardType
@@ -24,6 +25,7 @@ import { CliError } from '../lib/output'
 type CardListOptions = {
   type?: string
   parent?: string
+  root?: boolean
   limit?: string
 }
 
@@ -40,8 +42,17 @@ type CardUpdateOptions = {
   title?: string
   content?: string
   contentFile?: string
+  parent?: string
+  clearParent?: boolean
   readonly?: boolean
   editable?: boolean
+}
+
+type CardMoveOptions = {
+  before?: string
+  after?: string
+  top?: boolean
+  bottom?: boolean
 }
 
 type CardTypeCreateOptions = {
@@ -130,6 +141,47 @@ function parseReadonlyOption(options: Pick<CardUpdateOptions, 'readonly' | 'edit
   }
 
   return undefined
+}
+
+function resolveCardParentFilter(options: CardListOptions): string | null | undefined {
+  if (options.parent !== undefined && options.root) {
+    throw new CliError('VALIDATION_ERROR', 'Use only one of --parent or --root.', 4)
+  }
+
+  if (options.root) {
+    return null
+  }
+
+  return options.parent
+}
+
+function resolveCardParentUpdate(parentId: string | undefined, cleared: boolean | undefined): string | null | undefined {
+  if (parentId !== undefined && cleared) {
+    throw new CliError('VALIDATION_ERROR', 'Use only one of --parent or --clear-parent.', 4)
+  }
+
+  if (cleared) {
+    return null
+  }
+
+  return parentId
+}
+
+function resolveCardMoveTarget(options: CardMoveOptions): { beforeId?: string, afterId?: string, top?: boolean, bottom?: boolean } {
+  const selected = [options.before !== undefined, options.after !== undefined, options.top === true, options.bottom === true]
+    .filter(Boolean)
+    .length
+
+  if (selected !== 1) {
+    throw new CliError('VALIDATION_ERROR', 'Provide exactly one of --before, --after, --top, or --bottom.', 4)
+  }
+
+  return {
+    beforeId: options.before,
+    afterId: options.after,
+    top: options.top ? true : undefined,
+    bottom: options.bottom ? true : undefined
+  }
 }
 
 export function registerCardCommands(program: Command): void {
@@ -262,12 +314,13 @@ export function registerCardCommands(program: Command): void {
     .description('List cards in the default card space')
     .option('--type <type>', 'Filter by card type id or label')
     .option('--parent <id>', 'Filter by parent card id')
+    .option('--root', 'Filter to root cards without a parent')
     .option('--limit <n>', 'Maximum number of cards')
 
   handleCommand(list, async (options: CardListOptions) => {
     return await withClient(async (client) => await listCards(client, {
       type: options.type,
-      parentId: options.parent,
+      parentId: resolveCardParentFilter(options),
       limit: parseLimit(options.limit)
     }))
   })
@@ -308,6 +361,8 @@ export function registerCardCommands(program: Command): void {
     .option('--title <title>', 'Card title')
     .option('--content <markdown>', 'Card body markdown')
     .option('--content-file <path>', 'Read card body markdown from a file')
+    .option('--parent <id>', 'Parent card id')
+    .option('--clear-parent', 'Move the card back to the root level')
     .option('--readonly', 'Mark the card as readonly')
     .option('--editable', 'Mark the card as editable')
 
@@ -317,8 +372,22 @@ export function registerCardCommands(program: Command): void {
     return await withClient(async (client) => await updateCard(client, id, {
       title: options.title,
       content,
+      parentId: resolveCardParentUpdate(options.parent, options.clearParent),
       readonly: parseReadonlyOption(options)
     }))
+  })
+
+  const move = card
+    .command('move')
+    .description('Move a card within its current sibling order')
+    .argument('<id>', 'Card id')
+    .option('--before <id>', 'Move before another sibling card id')
+    .option('--after <id>', 'Move after another sibling card id')
+    .option('--top', 'Move to the top of the current sibling order')
+    .option('--bottom', 'Move to the bottom of the current sibling order')
+
+  handleCommand(move, async (id: string, options: CardMoveOptions) => {
+    return await withClient(async (client) => await moveCard(client, id, resolveCardMoveTarget(options)))
   })
 
   const remove = card
