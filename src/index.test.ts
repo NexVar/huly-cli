@@ -79,6 +79,30 @@ test('main returns JSON for nested command help', async () => {
   assert.ok(payload.data.commands.some((command) => command.name === 'blocker'))
 })
 
+test('main returns JSON for project help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'project', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'project')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'get'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'update'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
+})
+
 test('main returns JSON for issue template help', async () => {
   const { stdout, stderr } = await captureStreams(async () => {
     await main(['node', 'huly', 'issue', 'template', '--help'])

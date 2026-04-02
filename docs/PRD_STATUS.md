@@ -7,7 +7,7 @@ This repository is not at 100% PRD parity yet.
 Implemented command groups:
 
 - `auth login|status|logout`
-- `project list|get`
+- `project list|get|create|update|delete`
 - `issue list|get|create|update|delete|template list|get|relation add|relation remove|blocker add|blocker remove`
 - `member list|me`
 - `teamspace list|get|create|update|delete`
