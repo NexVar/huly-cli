@@ -301,6 +301,146 @@ export async function getProjectSummary(client: HulyClient, identifier: string):
   }
 }
 
+async function resolveDefaultProjectTypeId(client: HulyClient): Promise<string> {
+  const type = await client.findOne(task.class.ProjectType, {
+    targetClass: tracker.class.Project as never,
+    classic: true as never
+  } as never)
+
+  if (type) {
+    return type._id as string
+  }
+
+  const anyTrackerType = await client.findOne(task.class.ProjectType, {
+    targetClass: tracker.class.Project as never
+  } as never)
+
+  if (!anyTrackerType) {
+    throw new CliError('GENERAL_ERROR', 'Unable to resolve a tracker project type for new projects.', 1)
+  }
+
+  return anyTrackerType._id as string
+}
+
+async function resolveDefaultIssueStatusForType(client: HulyClient, projectTypeId: string): Promise<string> {
+  const projectType = await client.findOne(task.class.ProjectType, {
+    _id: projectTypeId as never
+  } as never, {
+    lookup: {
+      statuses: core.class.Status
+    }
+  })
+
+  const statuses = projectType?.$lookup?.statuses
+  if (!Array.isArray(statuses) || statuses.length === 0) {
+    throw new CliError('GENERAL_ERROR', 'Unable to resolve default issue status for new project.', 1)
+  }
+
+  const doneCategoryId = task.statusCategory.Won as string
+  const activeCategoryId = task.statusCategory.Active as string
+  const todoCategoryId = task.statusCategory.ToDo as string
+  const unstartedCategoryId = task.statusCategory.UnStarted as string
+
+  const preferred = statuses.find((status) => status.category === todoCategoryId)
+    ?? statuses.find((status) => status.category === unstartedCategoryId)
+    ?? statuses.find((status) => status.category === activeCategoryId)
+    ?? statuses.find((status) => status.category !== doneCategoryId)
+    ?? statuses[0]
+
+  return preferred._id as string
+}
+
+export async function createProject(
+  client: HulyClient,
+  options: {
+    identifier: string
+    name: string
+    description?: string
+  }
+): Promise<ProjectSummary> {
+  const identifier = requireNonEmptyString(options.identifier, 'Project identifier')
+  const name = requireNonEmptyString(options.name, 'Project name')
+
+  const existing = await client.findOne(tracker.class.Project, { identifier: identifier as never } as never)
+  if (existing) {
+    throw new CliError('VALIDATION_ERROR', `Project '${identifier}' already exists`, 4)
+  }
+
+  const projectTypeId = await resolveDefaultProjectTypeId(client)
+  const defaultIssueStatus = await resolveDefaultIssueStatusForType(client, projectTypeId)
+  const account = await client.getAccount()
+
+  const id = await client.createDoc(
+    tracker.class.Project,
+    core.space.Space,
+    {
+      identifier,
+      name,
+      description: options.description ?? '',
+      private: false,
+      archived: false,
+      members: [],
+      owners: [account.uuid],
+      autoJoin: true,
+      sequence: 0,
+      defaultIssueStatus,
+      defaultTimeReportDay: tracker.TimeReportDayType.CurrentWorkDay,
+      type: projectTypeId
+    } as never
+  )
+
+  const created = await client.findOne(tracker.class.Project, { _id: id as Ref<Project> })
+  if (!created) {
+    throw new CliError('GENERAL_ERROR', `Failed to load created project '${identifier}'`, 1)
+  }
+
+  return await getProjectSummary(client, created.identifier)
+}
+
+export async function updateProject(
+  client: HulyClient,
+  identifier: string,
+  updates: {
+    identifier?: string
+    name?: string
+    description?: string
+  }
+): Promise<ProjectSummary> {
+  const project = await getProjectByIdentifier(client, identifier)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.identifier !== undefined) {
+    const nextIdentifier = requireNonEmptyString(updates.identifier, 'Project identifier')
+    const existing = await client.findOne(tracker.class.Project, { identifier: nextIdentifier as never } as never)
+    if (existing && existing._id !== project._id) {
+      throw new CliError('VALIDATION_ERROR', `Project '${nextIdentifier}' already exists`, 4)
+    }
+
+    operations.identifier = nextIdentifier
+  }
+
+  if (updates.name !== undefined) {
+    operations.name = requireNonEmptyString(updates.name, 'Project name')
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No project fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(tracker.class.Project, core.space.Space, project._id, operations as never)
+  return await getProjectSummary(client, (operations.identifier as string | undefined) ?? identifier)
+}
+
+export async function deleteProject(client: HulyClient, identifier: string): Promise<{ deleted: true, identifier: string }> {
+  const project = await getProjectByIdentifier(client, identifier)
+  await client.removeDoc(tracker.class.Project, core.space.Space, project._id)
+  return { deleted: true, identifier }
+}
+
 export async function getMilestoneById(client: HulyClient, id: string): Promise<Milestone> {
   const milestone = await client.findOne(tracker.class.Milestone, { _id: id as Ref<Milestone> })
 
