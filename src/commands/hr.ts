@@ -38,6 +38,7 @@ type HrDepartmentCreateOptions = {
 type HrDepartmentUpdateOptions = {
   name?: string
   description?: string
+  clearDescription?: boolean
   parent?: string | false
   teamLead?: string | false
 }
@@ -66,6 +67,7 @@ type HrRequestUpdateOptions = {
   department?: string
   type?: string
   description?: string
+  clearDescription?: boolean
   date?: string
   dueDate?: string
   clearDueDate?: boolean
@@ -89,6 +91,7 @@ type HrPublicHolidayCreateOptions = {
 type HrPublicHolidayUpdateOptions = {
   title?: string
   description?: string
+  clearDescription?: boolean
   date?: string
   department?: string
 }
@@ -159,15 +162,20 @@ export function registerHrCommands(program: Command): void {
     .argument('<id>', 'Department id')
     .option('--name <name>', 'Department name')
     .option('--description <text>', 'Department description')
+    .option('--clear-description', 'Remove the department description')
     .option('--parent <id>', 'Parent department id')
     .option('--no-parent', 'Remove the parent department')
     .option('--team-lead <id>', 'Team lead person id')
     .option('--no-team-lead', 'Remove the team lead')
 
   handleCommand(departmentUpdate, async (id: string, options: HrDepartmentUpdateOptions) => {
+    if (options.description !== undefined && options.clearDescription) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --description or --clear-description.', 4)
+    }
+
     return await withClient(async (client) => await updateHrDepartment(client, id, {
       name: options.name,
-      description: options.description,
+      description: resolveNullableStringOption(options.description, options.clearDescription, 'description', 'clear-description'),
       parent: resolveNullableStringOption(options.parent, undefined, 'parent'),
       teamLead: resolveNullableStringOption(options.teamLead, undefined, 'team-lead')
     }))
@@ -257,13 +265,18 @@ export function registerHrCommands(program: Command): void {
     .argument('<id>', 'Public holiday id')
     .option('--title <title>', 'Public holiday title')
     .option('--description <text>', 'Public holiday description')
+    .option('--clear-description', 'Remove the public holiday description')
     .option('--date <date>', 'Public holiday date in ISO-8601 format')
     .option('--department <id>', 'Department id')
 
   handleCommand(publicHolidayUpdate, async (id: string, options: HrPublicHolidayUpdateOptions) => {
+    if (options.description !== undefined && options.clearDescription) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --description or --clear-description.', 4)
+    }
+
     return await withClient(async (client) => await updateHrPublicHoliday(client, id, {
       title: options.title,
-      description: options.description,
+      description: resolveNullableStringOption(options.description, options.clearDescription, 'description', 'clear-description'),
       date: parseIsoDate(options.date, '--date'),
       departmentId: options.department
     }))
@@ -338,15 +351,20 @@ export function registerHrCommands(program: Command): void {
     .option('--department <id>', 'Department id')
     .option('--type <id>', 'Request type id')
     .option('--description <text>', 'Request description')
+    .option('--clear-description', 'Remove the request description')
     .option('--date <date>', 'Request date in ISO-8601 format')
     .option('--due-date <date>', 'Due date in ISO-8601 format')
     .option('--clear-due-date', 'Remove the due date')
 
   handleCommand(requestUpdate, async (id: string, options: HrRequestUpdateOptions) => {
+    if (options.description !== undefined && options.clearDescription) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --description or --clear-description.', 4)
+    }
+
     return await withClient(async (client) => await updateHrRequest(client, id, {
       departmentId: options.department,
       typeId: options.type,
-      description: options.description,
+      description: resolveNullableStringOption(options.description, options.clearDescription, 'description', 'clear-description'),
       date: parseIsoDate(options.date, '--date'),
       dueDate: resolveNullableStringOption(
         parseIsoDate(options.dueDate, '--due-date'),

@@ -368,6 +368,15 @@ export type BoardSummary = {
   modifiedOn: string | null
 }
 
+export type BoardStatusSummary = {
+  id: string
+  name: string
+  color: number | null
+  categoryId: string | null
+  category: string | null
+  cardCount: number
+}
+
 export type BoardCardSummary = {
   id: string
   boardId: string

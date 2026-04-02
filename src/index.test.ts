@@ -191,6 +191,7 @@ test('main returns JSON for board help', async () => {
   assert.ok(payload.data.commands.some((command) => command.name === 'list'))
   assert.ok(payload.data.commands.some((command) => command.name === 'card'))
   assert.ok(payload.data.commands.some((command) => command.name === 'column'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'status'))
   assert.ok(payload.data.commands.some((command) => command.name === 'create'))
   assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
 })
@@ -338,6 +339,26 @@ test('main returns JSON for board column help', async () => {
   assert.ok(payload.data.commands.some((command) => command.name === 'get'))
 })
 
+test('main returns JSON for board status help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'board', 'status', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'status')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+})
+
 test('main returns JSON for board card help', async () => {
   const { stdout, stderr } = await captureStreams(async () => {
     await main(['node', 'huly', 'board', 'card', '--help'])
@@ -450,6 +471,7 @@ test('main returns JSON for drive help', async () => {
   assert.equal(payload.ok, true)
   assert.equal(payload.data.command, 'drive')
   assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'activity'))
   assert.ok(payload.data.commands.some((command) => command.name === 'create'))
   assert.ok(payload.data.commands.some((command) => command.name === 'folder'))
   assert.ok(payload.data.commands.some((command) => command.name === 'file'))
@@ -474,6 +496,7 @@ test('main returns JSON for drive folder help', async () => {
   assert.equal(payload.ok, true)
   assert.equal(payload.data.command, 'folder')
   assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'activity'))
   assert.ok(payload.data.commands.some((command) => command.name === 'create'))
   assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
 })
@@ -820,6 +843,26 @@ test('main returns JSON for time list help with richer todo filters', async () =
   assert.ok(payload.data.options.some((option) => option.flags === '--due-date-to <date>'))
 })
 
+test('main returns JSON for time update help with due-date clear option', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'time', 'update', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      options: Array<{ flags: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'update')
+  assert.ok(payload.data.options.some((option) => option.flags === '--clear-due-date'))
+})
+
 test('main returns JSON for time report list help with description and value filters', async () => {
   const { stdout, stderr } = await captureStreams(async () => {
     await main(['node', 'huly', 'time', 'report', 'list', '--help'])
@@ -889,6 +932,114 @@ test('main rejects conflicting time todo description update flags', async () => 
     assert.equal(payload.ok, false)
     assert.equal(payload.error.code, 'VALIDATION_ERROR')
     assert.equal(payload.error.message, 'Use only one of --description/--description-file or --clear-description.')
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
+})
+
+test('main rejects conflicting time todo due-date update flags', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main(['node', 'huly', 'time', 'update', 'todo-id', '--due-date', '2026-01-01', '--clear-due-date'])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.equal(payload.error.message, 'Use only one of --due-date or --clear-due-date.')
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
+})
+
+test('main rejects conflicting hr department description update flags', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main(['node', 'huly', 'hr', 'department', 'update', 'dept-id', '--description', 'a', '--clear-description'])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.equal(payload.error.message, 'Use only one of --description or --clear-description.')
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
+})
+
+test('main rejects conflicting hr public-holiday description update flags', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main(['node', 'huly', 'hr', 'public-holiday', 'update', 'holiday-id', '--description', 'a', '--clear-description'])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.equal(payload.error.message, 'Use only one of --description or --clear-description.')
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
+})
+
+test('main rejects conflicting hr request description update flags', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main(['node', 'huly', 'hr', 'request', 'update', 'request-id', '--description', 'a', '--clear-description'])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.equal(payload.error.message, 'Use only one of --description or --clear-description.')
     assert.equal(process.exitCode, 4)
   } finally {
     process.exitCode = originalExitCode

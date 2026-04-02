@@ -35,11 +35,13 @@ Additional implemented commands:
 - `chat thread list|get|send|update|delete`
 - `comment list|add`
 - `board list|get|create|update|delete`
+- `board status list`
 - `board column list|get`
 - `board card list|get|create|update|move|delete`
 - `card types|type list|get|create|update|delete|role list|get|create|update|delete|list|get|create|update|move|delete`
 - `drive list|get|create|update|delete`
-- `drive folder list|get|create|update|delete`
+- `drive activity`
+- `drive folder list|get|create|update|delete|activity`
 - `drive file list|get|create|update|delete|activity`
 - `hr department list|get|create|update|delete`
 - `hr employee list|get`
@@ -69,7 +71,7 @@ Current `time` scope:
 - The current totals view returns overall hours plus issue, day, and employee groupings from the matching report set.
 - `time list` now supports exact `--title`, exact `--priority`, and due-date range filters through `--due-date-from` / `--due-date-to`.
 - `time report list` and `time report totals` now support exact `--description` plus numeric `--value-from` / `--value-to` filtering.
-- `time update` now supports `--clear-description` for todos, `time report update` supports `--clear-description` for report notes, and todo due dates follow the same ISO-8601 validation path as the rest of the CLI.
+- `time update` now supports both `--clear-description` and `--clear-due-date` for todos, `time report update` supports `--clear-description` for report notes, and todo due dates follow the same ISO-8601 validation path as the rest of the CLI.
 - Broader logged-time/reporting coverage from the long-term PRD is still pending beyond the current totals breakdowns.
 
 Current `card` scope:
@@ -114,15 +116,16 @@ Current `board` / `drive` scope:
 
 - `board` supports list|get|create|update|delete against workspace spaces, `board column list|get` as derived views of live card-status groupings, and `board card list|get|create|update|move|delete` for board-attached cards.
 - Board create/get/update/list now round-trip the published `Board.color` and `Board.background` metadata in addition to name/description/privacy/archive fields, and board update supports explicit `--clear-color` / `--clear-background` flows.
-- `board list` now supports exact `--name`, `--private`, `--public`, `--archived`, and `--active` filtering.
+- `board list` now supports exact `--name`, `--private`, `--public`, `--archived`, `--active`, and `--limit` filtering.
 - Board-card writes use the verified attached-document path on `board.class.Board -> cards`, with markdown description support, published cover metadata (`cover.color` / `cover.size`), member employee refs, start/due date, location, archive-state updates, assignee round-tripping through person ids, status round-tripping through Huly status refs, and explicit rank-based reordering.
 - `board card list` supports exact `--title`, exact `--location`, `--status`, assignee, member, and `--archived` / `--active` filtering, returns rank-ordered cards when scoped to a board, `board card create|update` support explicit status ids, assignee person ids, cover metadata, and comma-separated member employee ids, `board card update` clears cover/members/location/start-date/due-date through explicit flags plus Commander-safe `--no-*` handling, and `board card move` now supports before/after/top/bottom ordering plus optional status changes, including inheriting the target card status on cross-column moves.
 - `board column list` groups current cards by status with friendly status/category names when the referenced model status exists, and `board column get --board ... (--status ...|--without-status)` returns one derived column plus a rank-ordered card sample for that column.
+- `board status list` returns status ids currently used by board cards (optionally scoped with `--board`) with resolved names/categories plus card counts.
 - `drive` supports both workspace drive spaces and lightweight folder/file record CRUD through backend document refs. File activity history is smoke-tested live with disposable resources and cleanup.
 - `drive list` now supports exact `--name`, `--private`, `--public`, `--archived`, `--active`, and `--limit` filtering.
 - `drive folder list` / `drive file list` now support exact `--title`, `--name`, and `--limit` filtering for lightweight record lookups.
 - `drive update` now supports `--clear-description`, and `drive folder update` / `drive file update` now support `--clear-name` for lightweight record cleanup flows.
-- `drive file activity` reads attached `activity:class:DocUpdateMessage` entries, which gives a safe verified history surface even though full drive-content/blob workflows are still not implemented.
+- `drive activity`, `drive folder activity`, and `drive file activity` read attached `activity:class:DocUpdateMessage` entries, which gives a safe verified history surface even though full drive-content/blob workflows are still not implemented.
 - `drive` currently targets backend document refs directly because the drive npm package is not published on npm even though the backend namespace exists and is usable live.
 
 Current `hr` scope:
@@ -130,6 +133,7 @@ Current `hr` scope:
 - `hr` currently supports department CRUD, employee list|get, public-holiday CRUD, request-type list, and request list|get|create|update|delete.
 - Public holiday CRUD uses the published HR package model in `core:space:Workspace`; create defaults to `hr:ids:Head` when `--department` is omitted, and public-holiday list now supports exact `--title` plus `--date-from`, `--date-to`, and `--limit` filtering. Request creation uses the correct attached-doc path and defaults to the current authenticated member when `--employee` is omitted. Request list now supports `--employee`, `--department`, `--type`, `--date-from`, `--date-to`, `--due-date-from`, and `--due-date-to`, with day-bucket comparisons that match Huly's `tzDate` behavior. Request update now supports `--clear-due-date`.
 - Department update now safely clears parent and team lead through Commander-safe `--no-parent` and `--no-team-lead` handling. These flows were smoke-tested live against the current workspace, including request type resolution and cleanup.
+- Department, public-holiday, and request update now support explicit `--clear-description` flows.
 
 Current `notification` scope:
 
@@ -142,12 +146,13 @@ Current `recruit` scope:
 - `recruit` currently supports vacancy CRUD, applicant-status list, applicant list|get|create|update|move|delete, candidate list|get|create|update|delete, review list|get|create|update|delete, and opinion list|get|create|update|delete.
 - Vacancy, applicant, review, and opinion writes use backend-validated payload shapes discovered through live smoke rather than guessed package-level abstractions. Vacancy update now round-trips `fullDescription` and supports `--clear-full-description`, `--clear-location`, and `--clear-due-date`. Vacancy list now uses backend exact-match filtering for `--name`, `--location`, `--private`, `--public`, `--archived`, and `--active`, including the archived-aware `showArchived` path required by Huly's list API. Review creation follows Huly's calendar-event payload requirements, and opinion CRUD uses the verified `Review -> opinions` attached collection path.
 - Applicant statuses are resolved from the published recruit task type instead of hard-coded display labels, applicant summaries now expose `statusId` and `rank`, applicant list supports vacancy, exact `--identifier`, status, assignee, and unassigned filtering for lifecycle automation, and vacancy-scoped applicant ordering is rank-sorted when filtering by vacancy. Applicant update safely clears assignee/start-date/due-date through Commander-safe `--no-*` handling, and applicant move now supports `--before|--after|--top|--bottom` plus optional status changes while preserving same-vacancy safety. Candidate CRUD is implemented by creating/updating contact persons with the recruit candidate mixin; candidate list now supports exact `--name`, `--city`, `--title`, `--source`, `--remote`, and `--onsite` filters, review list supports exact `--verdict` and exact `--location`, opinion list supports exact `--value`, and candidate update supports clearing `city`, `title`, and `source` plus explicit `--no-remote` / `--no-onsite` toggles.
+- Vacancy summaries now protect `applicantCount` against backends that return unknown totals by falling back to bounded count reads, so counts do not degrade to sentinel negative values.
 - Review and opinion descriptions use the shared markup update path that was already fixed for other markdown-backed entities, so description create/update round-trips are verified live, including explicit `--clear-description` update flows. Review due dates remain settable but do not expose a clear flag yet, because a live null-update probe kept the previous backend value.
 
 Verification snapshot:
 
 - Local verification: `npm run build`, `npm test`
-- Live verification: built CLI auth via token, teamspace/person CRUD plus exact list filters, clear flows, and cleanup, nested doc hierarchy create/list/update/delete flows in a disposable teamspace, milestone/label/component CRUD plus label assign/unassign cleanup, board column get plus board-card title/location/archived-state filters, status-aware move flows, member filtering, and cleanup, card parent/move flows plus custom card-type `--clear-color` / `--clear-background`, chat channel exact name/member/kind/private/public/archived filters plus `--clear-topic` / `--clear-description`, drive list `--limit`, drive file activity plus drive space clear-description, drive folder/file clear-name flows, and drive folder/file exact title/name list filters with cleanup, hr department clear-parent/team-lead flows, hr public-holiday title/date/limit filters, hr request clear-due-date flows, read-only notification class/object/type filters against the real inbox, recruit vacancy full-description plus private/public/archived/active filters, recruit applicant identifier/filter/clear/move flows, recruit candidate exact name/city/title/source/remote/onsite filters, recruit review verdict/location filters, recruit opinion value filters, recruit candidate/review/opinion CRUD including candidate clear/toggle flows and review/opinion clear-description flows with cleanup, `time list` title/priority/due-date-range filters, `time report list` description/value-range filters, `time report totals` description/value-range filtering, `time update --clear-description`, `time report update --clear-description`, and `time report totals` day-bucket aggregation with `--date-from` filtering
+- Live verification: built CLI auth via token, project CRUD, teamspace/person CRUD plus exact list filters, clear flows, and cleanup, nested doc hierarchy create/list/update/delete flows in a disposable teamspace, milestone/label/component CRUD plus label assign/unassign cleanup, board column/status flows plus board list `--limit`, board-card title/location/archived-state filters, status-aware move flows, member filtering, and cleanup, card parent/move flows plus custom card-type `--clear-color` / `--clear-background`, chat channel exact name/member/kind/private/public/archived filters plus `--clear-topic` / `--clear-description`, drive list `--limit`, drive space/folder/file activity reads plus drive space clear-description, drive folder/file clear-name flows, and drive folder/file exact title/name list filters with cleanup, hr department clear-parent/team-lead plus clear-description flows, hr public-holiday title/date/limit plus clear-description flows, hr request clear-due-date plus clear-description flows, read-only notification class/object/type filters against the real inbox, recruit vacancy full-description plus private/public/archived/active filters and applicantCount validation, recruit applicant identifier/filter/clear/move flows, recruit candidate exact name/city/title/source/remote/onsite filters, recruit review verdict/location filters, recruit opinion value filters, recruit candidate/review/opinion CRUD including candidate clear/toggle flows and review/opinion clear-description flows with cleanup, `time list` title/priority/due-date-range filters, `time report list` description/value-range filters, `time report totals` description/value-range filtering, `time update --clear-description|--clear-due-date`, `time report update --clear-description`, and `time report totals` day-bucket aggregation with `--date-from` filtering
 - The README reflects verified commands only. Broader PRD parity work is still in progress.
 
 ## Install

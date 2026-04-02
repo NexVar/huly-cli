@@ -16,7 +16,7 @@ import time, { ToDoPriority, type ToDo } from '@hcengineering/time'
 import tracker, { IssuePriority, MilestoneStatus, TimeReportDayType, type Component, type Issue, type IssueTemplate, type Milestone, type Project, type TimeSpendReport } from '@hcengineering/tracker'
 import { connectClient, type HulyClient } from './client'
 import { CliError } from './output'
-import type { BoardCardSummary, BoardColumnDetailSummary, BoardColumnSummary, BoardSummary, CardRoleSummary, CardSummary, CardTypeSummary, ChannelSummary, ChatMemberSummary, ChatMessageSummary, ChatSpaceSummary, ChatThreadSummary, CommentSummary, ComponentSummary, DocumentSummary, DriveActivitySummary, DriveResourceSummary, DriveSummary, HrDepartmentSummary, HrEmployeeSummary, HrPublicHolidaySummary, HrRequestSummary, HrRequestTypeSummary, IssueSummary, IssueTemplateSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, RecruitApplicantStatusSummary, RecruitApplicantSummary, RecruitCandidateSummary, RecruitOpinionSummary, RecruitReviewSummary, RecruitVacancySummary, TeamspaceSummary, TimeReportSummary, TimeReportTotalsSummary, TimeTodoSummary } from './types'
+import type { BoardCardSummary, BoardColumnDetailSummary, BoardColumnSummary, BoardStatusSummary, BoardSummary, CardRoleSummary, CardSummary, CardTypeSummary, ChannelSummary, ChatMemberSummary, ChatMessageSummary, ChatSpaceSummary, ChatThreadSummary, CommentSummary, ComponentSummary, DocumentSummary, DriveActivitySummary, DriveResourceSummary, DriveSummary, HrDepartmentSummary, HrEmployeeSummary, HrPublicHolidaySummary, HrRequestSummary, HrRequestTypeSummary, IssueSummary, IssueTemplateSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, RecruitApplicantStatusSummary, RecruitApplicantSummary, RecruitCandidateSummary, RecruitOpinionSummary, RecruitReviewSummary, RecruitVacancySummary, TeamspaceSummary, TimeReportSummary, TimeReportTotalsSummary, TimeTodoSummary } from './types'
 
 const { getDirectChannel } = require('@hcengineering/chunter/lib/utils.js') as {
   getDirectChannel: (client: unknown, me: string, employeeAccount: string) => Promise<string>
@@ -2568,7 +2568,7 @@ export async function updateTimeTodo(
     description?: string
     priority?: string
     assignee?: string
-    dueDate?: string
+    dueDate?: string | null
   }
 ): Promise<TimeTodoSummary> {
   const todo = await getTimeTodoById(client, id)
@@ -4468,10 +4468,11 @@ export async function listBoards(
     name?: string
     private?: boolean
     archived?: boolean
+    limit?: number
   } = {}
 ): Promise<BoardSummary[]> {
   const entries = await client.findAll(board.class.Board as any, {}, {
-    limit: 100,
+    limit: options.limit ?? 100,
     sort: { name: SortingOrder.Ascending },
     showArchived: options.archived !== undefined
   })
@@ -4493,6 +4494,82 @@ export async function listBoards(
       return true
     })
     .map((entry) => mapBoardSummary(entry))
+}
+
+export async function listBoardStatuses(
+  client: HulyClient,
+  options: {
+    boardId?: string
+  } = {}
+): Promise<BoardStatusSummary[]> {
+  if (options.boardId !== undefined) {
+    await getBoardById(client, options.boardId)
+  }
+
+  const cards = await client.findAll(board.class.Card as any, {
+    ...(options.boardId === undefined ? {} : { attachedTo: options.boardId as never })
+  }, {
+    limit: 5000,
+    sort: { modifiedOn: SortingOrder.Descending }
+  })
+  const statusCountById = new Map<string, number>()
+
+  for (const cardDoc of cards as any[]) {
+    const statusId = normalizeUnknownString(cardDoc.status)
+
+    if (statusId === null) {
+      continue
+    }
+
+    statusCountById.set(statusId, (statusCountById.get(statusId) ?? 0) + 1)
+  }
+
+  const statusIds = Array.from(statusCountById.keys())
+
+  if (statusIds.length === 0) {
+    return []
+  }
+
+  const statuses = await client.findAll(core.class.Status as any, {
+    _id: { $in: statusIds as never[] }
+  }, {
+    limit: statusIds.length
+  })
+  const statusById = new Map<string, any>(statuses.map((status) => [status._id as string, status]))
+  const categoryIds = Array.from(new Set(
+    statuses
+      .map((status) => normalizeUnknownRef((status as any).category))
+      .filter((value): value is string => value !== null)
+  ))
+  const categories = categoryIds.length > 0
+    ? await client.findAll(core.class.StatusCategory as any, { _id: { $in: categoryIds as never[] } }, { limit: categoryIds.length })
+    : []
+  const categoryNameById = new Map<string, string>([
+    ...Array.from(TASK_STATUS_CATEGORY_LABELS.entries()),
+    ...categories.map((category) => [category._id as string, normalizeUnknownString((category as any).name) ?? category._id as string] as [string, string])
+  ])
+
+  return statusIds
+    .map((statusId) => {
+      const status = statusById.get(statusId)
+      const categoryId = normalizeUnknownRef(status?.category)
+
+      return {
+        id: statusId,
+        name: normalizeUnknownString(status?.name) ?? statusId,
+        color: typeof status?.color === 'number' ? status.color : null,
+        categoryId,
+        category: categoryId === null ? null : (categoryNameById.get(categoryId) ?? categoryId),
+        cardCount: statusCountById.get(statusId) ?? 0
+      }
+    })
+    .sort((left, right) => {
+      if (right.cardCount !== left.cardCount) {
+        return right.cardCount - left.cardCount
+      }
+
+      return left.name.localeCompare(right.name)
+    })
 }
 
 export async function getBoardSummary(client: HulyClient, id: string): Promise<BoardSummary> {
@@ -5513,7 +5590,7 @@ export async function updateHrDepartment(
   id: string,
   updates: {
     name?: string
-    description?: string
+    description?: string | null
     parent?: string | null
     teamLead?: string | null
   }
@@ -5713,7 +5790,7 @@ export async function updateHrPublicHoliday(
   id: string,
   updates: {
     title?: string
-    description?: string
+    description?: string | null
     date?: string
     departmentId?: string
   }
@@ -5963,7 +6040,7 @@ export async function updateHrRequest(
   updates: {
     departmentId?: string
     typeId?: string
-    description?: string
+    description?: string | null
     date?: string
     dueDate?: string | null
   }
@@ -6017,6 +6094,19 @@ async function getRecruitVacancyById(client: HulyClient, id: string): Promise<an
 
 async function mapRecruitVacancySummary(client: HulyClient, vacancy: any): Promise<RecruitVacancySummary> {
   const applicants = await client.findAll(RECRUIT_APPLICANT_CLASS as any, { attachedTo: vacancy._id as never }, { limit: 1 })
+  let applicantCount = applicants.total
+
+  if (typeof applicantCount !== 'number' || applicantCount < 0) {
+    const fallbackApplicants = await client.findAll(RECRUIT_APPLICANT_CLASS as any, {
+      attachedTo: vacancy._id as never
+    }, {
+      limit: 5000
+    })
+
+    applicantCount = typeof fallbackApplicants.total === 'number' && fallbackApplicants.total >= 0
+      ? fallbackApplicants.total
+      : fallbackApplicants.length
+  }
 
   return {
     id: vacancy._id,
@@ -6030,7 +6120,7 @@ async function mapRecruitVacancySummary(client: HulyClient, vacancy: any): Promi
     private: Boolean(vacancy.private),
     archived: Boolean(vacancy.archived),
     type: normalizeUnknownString(vacancy.type),
-    applicantCount: applicants.length,
+    applicantCount,
     createdOn: timestampToIso(vacancy.createdOn),
     modifiedOn: timestampToIso(vacancy.modifiedOn)
   }

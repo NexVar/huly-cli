@@ -1,7 +1,7 @@
 import { Command } from 'commander'
 import { handleCommand } from '../lib/command'
 import { withClient } from '../lib/client'
-import { createDrive, createDriveFile, createDriveFolder, deleteDrive, deleteDriveFile, deleteDriveFolder, getDriveFileSummary, getDriveFolderSummary, getDriveSummary, listDriveFileActivity, listDriveFiles, listDriveFolders, listDrives, updateDrive, updateDriveFile, updateDriveFolder } from '../lib/huly'
+import { createDrive, createDriveFile, createDriveFolder, deleteDrive, deleteDriveFile, deleteDriveFolder, getDriveFileSummary, getDriveFolderSummary, getDriveSummary, listDriveActivity, listDriveFileActivity, listDriveFiles, listDriveFolderActivity, listDriveFolders, listDrives, updateDrive, updateDriveFile, updateDriveFolder } from '../lib/huly'
 import { CliError } from '../lib/output'
 
 type DriveCreateOptions = {
@@ -138,6 +138,16 @@ export function registerDriveCommands(program: Command): void {
 
   handleCommand(get, async (id: string) => await withClient(async (client) => await getDriveSummary(client, id)))
 
+  const activity = drive
+    .command('activity')
+    .description('List drive activity')
+    .argument('<id>', 'Drive id')
+    .option('--limit <n>', 'Maximum number of activity messages')
+
+  handleCommand(activity, async (id: string, options: DriveActivityListOptions) => {
+    return await withClient(async (client) => await listDriveActivity(client, id, parseLimit(options.limit)))
+  })
+
   const create = drive
     .command('create')
     .description('Create a drive')
@@ -230,6 +240,16 @@ export function registerDriveCommands(program: Command): void {
       title: options.title,
       name: options.clearName ? null : options.name
     }))
+  })
+
+  const folderActivity = folder
+    .command('activity')
+    .description('List drive folder activity')
+    .argument('<id>', 'Drive folder id')
+    .option('--limit <n>', 'Maximum number of activity messages')
+
+  handleCommand(folderActivity, async (id: string, options: DriveActivityListOptions) => {
+    return await withClient(async (client) => await listDriveFolderActivity(client, id, parseLimit(options.limit)))
   })
 
   const folderDelete = folder

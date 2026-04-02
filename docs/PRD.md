@@ -319,14 +319,14 @@ The following Huly features will be supported as their `@hcengineering/*` type p
 
 | Module | CLI Namespace | Entities | Status |
 |--------|--------------|----------|--------|
-| HR | `huly hr` | departments, employees, requests | Pending API discovery |
-| Boards | `huly board` | boards, cards, columns | Pending API discovery |
-| Time Tracking | `huly time` | time reports, logged time | Pending API discovery |
-| Drive | `huly drive` | files, folders | Pending API discovery |
-| Chat | `huly chat` | channels, messages | Pending API discovery |
-| Notifications | `huly notification` | notifications, read/unread | Pending API discovery |
-| Cards | `huly card` | custom types, relations, attributes | Pending API discovery |
-| Recruiting | `huly recruit` | vacancies, applications, candidates | Pending API discovery |
+| HR | `huly hr` | departments, employees, requests | Implemented (broad coverage; deeper parity pending) |
+| Boards | `huly board` | boards, cards, columns | Implemented (broad coverage; deeper parity pending) |
+| Time Tracking | `huly time` | time reports, logged time | Implemented (broad coverage; deeper parity pending) |
+| Drive | `huly drive` | files, folders | Implemented (broad coverage; deeper parity pending) |
+| Chat | `huly chat` | channels, messages | Implemented (broad coverage; deeper parity pending) |
+| Notifications | `huly notification` | notifications, read/unread | Implemented (broad coverage; deeper parity pending) |
+| Cards | `huly card` | custom types, relations, attributes | Implemented (broad coverage; deeper parity pending) |
+| Recruiting | `huly recruit` | vacancies, applications, candidates | Implemented (broad coverage; deeper parity pending) |
 
 These will follow the same `huly <resource> <action>` pattern and JSON output envelope.
 

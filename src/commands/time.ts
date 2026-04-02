@@ -17,6 +17,7 @@ import {
   updateTimeReport,
   updateTimeTodo
 } from '../lib/huly'
+import { resolveNullableStringOption } from '../lib/options'
 import { CliError } from '../lib/output'
 
 type TimeListOptions = {
@@ -78,6 +79,7 @@ type TimeUpdateOptions = {
   priority?: string
   assignee?: string
   dueDate?: string
+  clearDueDate?: boolean
 }
 
 type TimeReportUpdateOptions = {
@@ -214,10 +216,15 @@ export function registerTimeCommands(program: Command): void {
     .option('--priority <priority>', 'Todo priority')
     .option('--assignee <email>', 'Assignee email')
     .option('--due-date <date>', 'Due date in ISO-8601 format')
+    .option('--clear-due-date', 'Remove the due date')
 
   handleCommand(update, async (id: string, options: TimeUpdateOptions) => {
     if (options.clearDescription && (options.description !== undefined || options.descriptionFile !== undefined)) {
       throw new CliError('VALIDATION_ERROR', 'Use only one of --description/--description-file or --clear-description.', 4)
+    }
+
+    if (options.dueDate !== undefined && options.clearDueDate) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --due-date or --clear-due-date.', 4)
     }
 
     const description = options.clearDescription
@@ -229,7 +236,12 @@ export function registerTimeCommands(program: Command): void {
       description,
       priority: options.priority,
       assignee: options.assignee,
-      dueDate: parseIsoDate(options.dueDate, '--due-date')
+      dueDate: resolveNullableStringOption(
+        parseIsoDate(options.dueDate, '--due-date'),
+        options.clearDueDate,
+        'due-date',
+        'clear-due-date'
+      )
     }))
   })
 

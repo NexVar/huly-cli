@@ -2,7 +2,7 @@ import { Command } from 'commander'
 import { handleCommand } from '../lib/command'
 import { withClient } from '../lib/client'
 import { readTextOption } from '../lib/files'
-import { createBoard, createBoardCard, deleteBoard, deleteBoardCard, getBoardCardSummary, getBoardColumnSummary, getBoardSummary, listBoardCards, listBoardColumns, listBoards, moveBoardCard, updateBoard, updateBoardCard } from '../lib/huly'
+import { createBoard, createBoardCard, deleteBoard, deleteBoardCard, getBoardCardSummary, getBoardColumnSummary, getBoardSummary, listBoardCards, listBoardColumns, listBoards, listBoardStatuses, moveBoardCard, updateBoard, updateBoardCard } from '../lib/huly'
 import { resolveNullableStringOption } from '../lib/options'
 import { CliError } from '../lib/output'
 
@@ -20,6 +20,7 @@ type BoardListOptions = {
   public?: boolean
   archived?: boolean
   active?: boolean
+  limit?: string
 }
 
 type BoardUpdateOptions = {
@@ -38,6 +39,10 @@ type BoardUpdateOptions = {
 type BoardColumnListOptions = {
   board?: string
   includeEmpty?: boolean
+}
+
+type BoardStatusListOptions = {
+  board?: string
 }
 
 type BoardColumnGetOptions = {
@@ -303,11 +308,13 @@ export function registerBoardCommands(program: Command): void {
     .option('--public', 'Filter to public boards')
     .option('--archived', 'Filter to archived boards')
     .option('--active', 'Filter to non-archived boards')
+    .option('--limit <n>', 'Maximum number of boards')
 
   handleCommand(list, async (options: BoardListOptions) => await withClient(async (client) => await listBoards(client, {
     name: options.name,
     private: resolvePrivate(options),
-    archived: resolveArchivedFilter(options)
+    archived: resolveArchivedFilter(options),
+    limit: parseLimit(options.limit)
   })))
 
   const get = board
@@ -407,6 +414,21 @@ export function registerBoardCommands(program: Command): void {
       boardId: options.board,
       status: resolveBoardColumnStatus(options),
       cardsLimit: parseLimit(options.cardsLimit)
+    }))
+  })
+
+  const status = board
+    .command('status')
+    .description('Board status commands')
+
+  const statusList = status
+    .command('list')
+    .description('List statuses used by board cards')
+    .option('--board <id>', 'Filter statuses to one board id')
+
+  handleCommand(statusList, async (options: BoardStatusListOptions) => {
+    return await withClient(async (client) => await listBoardStatuses(client, {
+      boardId: options.board
     }))
   })
 
