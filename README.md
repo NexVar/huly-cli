@@ -16,7 +16,7 @@ The project currently implements the PRD's Phase 1 command set plus several late
 Current Phase 1 commands:
 
 - `auth login|status|logout`
-- `project list|get`
+- `project list|get|create|update|delete`
 - `issue list|get|create|update|delete|template list|get|relation add|relation remove|blocker add|blocker remove`
 - `member list|me`
 

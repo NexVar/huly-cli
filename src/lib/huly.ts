@@ -13,7 +13,7 @@ import tags, { type TagElement, type TagReference } from '@hcengineering/tags'
 import { jsonToMarkup, markupToJSON } from '@hcengineering/text'
 import { markdownToMarkup, markupToMarkdown } from '@hcengineering/text-markdown'
 import time, { ToDoPriority, type ToDo } from '@hcengineering/time'
-import tracker, { IssuePriority, MilestoneStatus, type Component, type Issue, type IssueTemplate, type Milestone, type Project, type TimeSpendReport } from '@hcengineering/tracker'
+import tracker, { IssuePriority, MilestoneStatus, TimeReportDayType, type Component, type Issue, type IssueTemplate, type Milestone, type Project, type TimeSpendReport } from '@hcengineering/tracker'
 import { connectClient, type HulyClient } from './client'
 import { CliError } from './output'
 import type { BoardCardSummary, BoardColumnDetailSummary, BoardColumnSummary, BoardSummary, CardRoleSummary, CardSummary, CardTypeSummary, ChannelSummary, ChatMemberSummary, ChatMessageSummary, ChatSpaceSummary, ChatThreadSummary, CommentSummary, ComponentSummary, DocumentSummary, DriveActivitySummary, DriveResourceSummary, DriveSummary, HrDepartmentSummary, HrEmployeeSummary, HrPublicHolidaySummary, HrRequestSummary, HrRequestTypeSummary, IssueSummary, IssueTemplateSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, RecruitApplicantStatusSummary, RecruitApplicantSummary, RecruitCandidateSummary, RecruitOpinionSummary, RecruitReviewSummary, RecruitVacancySummary, TeamspaceSummary, TimeReportSummary, TimeReportTotalsSummary, TimeTodoSummary } from './types'
@@ -301,55 +301,6 @@ export async function getProjectSummary(client: HulyClient, identifier: string):
   }
 }
 
-async function resolveDefaultProjectTypeId(client: HulyClient): Promise<string> {
-  const type = await client.findOne(task.class.ProjectType, {
-    targetClass: tracker.class.Project as never,
-    classic: true as never
-  } as never)
-
-  if (type) {
-    return type._id as string
-  }
-
-  const anyTrackerType = await client.findOne(task.class.ProjectType, {
-    targetClass: tracker.class.Project as never
-  } as never)
-
-  if (!anyTrackerType) {
-    throw new CliError('GENERAL_ERROR', 'Unable to resolve a tracker project type for new projects.', 1)
-  }
-
-  return anyTrackerType._id as string
-}
-
-async function resolveDefaultIssueStatusForType(client: HulyClient, projectTypeId: string): Promise<string> {
-  const projectType = await client.findOne(task.class.ProjectType, {
-    _id: projectTypeId as never
-  } as never, {
-    lookup: {
-      statuses: core.class.Status
-    }
-  })
-
-  const statuses = projectType?.$lookup?.statuses
-  if (!Array.isArray(statuses) || statuses.length === 0) {
-    throw new CliError('GENERAL_ERROR', 'Unable to resolve default issue status for new project.', 1)
-  }
-
-  const doneCategoryId = task.statusCategory.Won as string
-  const activeCategoryId = task.statusCategory.Active as string
-  const todoCategoryId = task.statusCategory.ToDo as string
-  const unstartedCategoryId = task.statusCategory.UnStarted as string
-
-  const preferred = statuses.find((status) => status.category === todoCategoryId)
-    ?? statuses.find((status) => status.category === unstartedCategoryId)
-    ?? statuses.find((status) => status.category === activeCategoryId)
-    ?? statuses.find((status) => status.category !== doneCategoryId)
-    ?? statuses[0]
-
-  return preferred._id as string
-}
-
 export async function createProject(
   client: HulyClient,
   options: {
@@ -366,8 +317,6 @@ export async function createProject(
     throw new CliError('VALIDATION_ERROR', `Project '${identifier}' already exists`, 4)
   }
 
-  const projectTypeId = await resolveDefaultProjectTypeId(client)
-  const defaultIssueStatus = await resolveDefaultIssueStatusForType(client, projectTypeId)
   const account = await client.getAccount()
 
   const id = await client.createDoc(
@@ -383,9 +332,9 @@ export async function createProject(
       owners: [account.uuid],
       autoJoin: true,
       sequence: 0,
-      defaultIssueStatus,
-      defaultTimeReportDay: tracker.TimeReportDayType.CurrentWorkDay,
-      type: projectTypeId
+      defaultIssueStatus: tracker.status.Todo,
+      defaultTimeReportDay: TimeReportDayType.CurrentWorkDay,
+      type: tracker.ids.ClassingProjectType
     } as never
   )
 
