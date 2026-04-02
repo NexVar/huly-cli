@@ -16,7 +16,7 @@ import time, { ToDoPriority, type ToDo } from '@hcengineering/time'
 import tracker, { IssuePriority, MilestoneStatus, type Component, type Issue, type IssueTemplate, type Milestone, type Project, type TimeSpendReport } from '@hcengineering/tracker'
 import { connectClient, type HulyClient } from './client'
 import { CliError } from './output'
-import type { BoardCardSummary, BoardColumnSummary, BoardSummary, CardRoleSummary, CardSummary, CardTypeSummary, ChannelSummary, ChatMemberSummary, ChatMessageSummary, ChatSpaceSummary, ChatThreadSummary, CommentSummary, ComponentSummary, DocumentSummary, DriveActivitySummary, DriveResourceSummary, DriveSummary, HrDepartmentSummary, HrEmployeeSummary, HrPublicHolidaySummary, HrRequestSummary, HrRequestTypeSummary, IssueSummary, IssueTemplateSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, RecruitApplicantStatusSummary, RecruitApplicantSummary, RecruitCandidateSummary, RecruitOpinionSummary, RecruitReviewSummary, RecruitVacancySummary, TeamspaceSummary, TimeReportSummary, TimeReportTotalsSummary, TimeTodoSummary } from './types'
+import type { BoardCardSummary, BoardColumnDetailSummary, BoardColumnSummary, BoardSummary, CardRoleSummary, CardSummary, CardTypeSummary, ChannelSummary, ChatMemberSummary, ChatMessageSummary, ChatSpaceSummary, ChatThreadSummary, CommentSummary, ComponentSummary, DocumentSummary, DriveActivitySummary, DriveResourceSummary, DriveSummary, HrDepartmentSummary, HrEmployeeSummary, HrPublicHolidaySummary, HrRequestSummary, HrRequestTypeSummary, IssueSummary, IssueTemplateSummary, LabelSummary, MemberSummary, MilestoneSummary, NotificationSummary, PersonSummary, ProjectSummary, RecruitApplicantStatusSummary, RecruitApplicantSummary, RecruitCandidateSummary, RecruitOpinionSummary, RecruitReviewSummary, RecruitVacancySummary, TeamspaceSummary, TimeReportSummary, TimeReportTotalsSummary, TimeTodoSummary } from './types'
 
 const { getDirectChannel } = require('@hcengineering/chunter/lib/utils.js') as {
   getDirectChannel: (client: unknown, me: string, employeeAccount: string) => Promise<string>
@@ -327,18 +327,59 @@ async function mapMilestoneSummary(
   }
 }
 
-export async function listMilestones(client: HulyClient, projectIdentifier: string): Promise<MilestoneSummary[]> {
-  const project = await getProjectByIdentifier(client, projectIdentifier)
-  const milestones = await client.findAll(tracker.class.Milestone, { space: project._id }, {
+export async function listMilestones(
+  client: HulyClient,
+  options: {
+    projectIdentifier: string
+    label?: string
+    status?: string
+    dateFrom?: string
+    dateTo?: string
+    limit?: number
+  }
+): Promise<MilestoneSummary[]> {
+  const project = await getProjectByIdentifier(client, options.projectIdentifier)
+  const query: Record<string, unknown> = { space: project._id }
+
+  if (options.label !== undefined) {
+    query.label = options.label
+  }
+
+  if (options.status !== undefined) {
+    query.status = parseMilestoneStatus(options.status)
+  }
+
+  const needsDateFiltering = options.dateFrom !== undefined || options.dateTo !== undefined
+  const milestones = await client.findAll(tracker.class.Milestone, query as never, {
+    limit: needsDateFiltering ? 5000 : options.limit,
     sort: { targetDate: SortingOrder.Ascending }
   })
 
-  return await Promise.all(milestones.map(async (milestone) => await mapMilestoneSummary(client, milestone, project.identifier)))
+  let summaries = await Promise.all(milestones.map(async (milestone) => await mapMilestoneSummary(client, milestone, project.identifier)))
+
+  if (needsDateFiltering) {
+    summaries = summaries.filter((milestone) => isIsoDayWithinRange(milestone.targetDate, {
+      from: options.dateFrom,
+      to: options.dateTo
+    }))
+  }
+
+  if (options.limit !== undefined) {
+    summaries = summaries.slice(0, options.limit)
+  }
+
+  return summaries
 }
 
 export async function getMilestoneSummary(client: HulyClient, id: string): Promise<MilestoneSummary> {
   const milestone = await getMilestoneById(client, id)
   return await mapMilestoneSummary(client, milestone)
+}
+
+export async function deleteMilestone(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const milestone = await getMilestoneById(client, id)
+  await client.removeDoc(tracker.class.Milestone, milestone.space, milestone._id)
+  return { deleted: true, id }
 }
 
 export async function createMilestone(
@@ -398,9 +439,47 @@ export async function updateMilestone(
   return await getMilestoneSummary(client, id)
 }
 
-export async function listPersons(client: HulyClient, limit?: number): Promise<PersonSummary[]> {
-  const persons = await client.findAll(contact.class.Person, {}, {
-    limit: limit ?? 100,
+export async function listPersons(
+  client: HulyClient,
+  options: {
+    name?: string
+    city?: string
+    email?: string
+    limit?: number
+  } = {}
+): Promise<PersonSummary[]> {
+  const query: Record<string, unknown> = {}
+
+  if (options.name !== undefined) {
+    query.name = options.name
+  }
+
+  if (options.city !== undefined) {
+    query.city = options.city
+  }
+
+  if (options.email !== undefined) {
+    const emailChannels = await client.findAll(contact.class.Channel, {
+      provider: contact.channelProvider.Email as never,
+      value: normalizeString(options.email) as never
+    }, {
+      limit: 100
+    })
+    const personIds = Array.from(new Set(
+      emailChannels
+        .map((channel) => normalizeUnknownRef(channel.attachedTo))
+        .filter((value): value is string => value !== null)
+    ))
+
+    if (personIds.length === 0) {
+      return []
+    }
+
+    query._id = { $in: personIds as never[] }
+  }
+
+  const persons = await client.findAll(contact.class.Person, query as never, {
+    limit: options.limit ?? 100,
     sort: { name: SortingOrder.Ascending }
   })
   const channelMap = await getChannelMapForPersons(client, persons.map((person) => person._id))
@@ -411,6 +490,81 @@ export async function listPersons(client: HulyClient, limit?: number): Promise<P
 export async function getPersonSummary(client: HulyClient, id: string): Promise<PersonSummary> {
   const person = await getPersonById(client, id)
   return await mapPersonSummary(client, person)
+}
+
+async function listPersonEmailChannels(client: HulyClient, personId: string): Promise<any[]> {
+  return await client.findAll(contact.class.Channel, {
+    attachedTo: personId as never,
+    provider: contact.channelProvider.Email as never
+  }, {
+    limit: 20,
+    sort: { value: SortingOrder.Ascending }
+  })
+}
+
+async function listPersonEmailIdentities(client: HulyClient, personId: string): Promise<any[]> {
+  return await client.findAll(contact.class.SocialIdentity, {
+    attachedTo: personId as never,
+    type: SocialIdType.EMAIL as never
+  }, {
+    limit: 20,
+    sort: { value: SortingOrder.Ascending }
+  })
+}
+
+async function syncPersonEmail(client: HulyClient, personId: string, email: string | null): Promise<void> {
+  const normalizedEmail = email === null ? null : normalizeString(email)
+
+  if (normalizedEmail !== null) {
+    const existing = await getPersonBySocialKey(client as never, socialKeyForEmail(normalizedEmail))
+    if (existing && existing._id !== personId) {
+      throw new CliError('VALIDATION_ERROR', `Email '${normalizedEmail}' is already attached to another person`, 4)
+    }
+  }
+
+  const [channels, identities] = await Promise.all([
+    listPersonEmailChannels(client, personId),
+    listPersonEmailIdentities(client, personId)
+  ])
+
+  for (const channel of channels) {
+    await client.removeDoc(contact.class.Channel, channel.space as never, channel._id as never)
+  }
+
+  for (const identity of identities) {
+    await client.removeDoc(contact.class.SocialIdentity, identity.space as never, identity._id as never)
+  }
+
+  if (normalizedEmail === null) {
+    return
+  }
+
+  await client.addCollection(
+    contact.class.Channel,
+    contact.space.Contacts,
+    personId as Ref<HulyPerson>,
+    contact.class.Person,
+    'channels',
+    {
+      provider: contact.channelProvider.Email,
+      value: normalizedEmail
+    } as never
+  )
+
+  await client.addCollection(
+    contact.class.SocialIdentity,
+    contact.space.Contacts,
+    personId as Ref<HulyPerson>,
+    contact.class.Person,
+    'socialIds',
+    {
+      type: SocialIdType.EMAIL,
+      value: normalizedEmail,
+      key: buildSocialIdString({ type: SocialIdType.EMAIL, value: normalizedEmail }),
+      verifiedOn: Date.now(),
+      isDeleted: false
+    } as never
+  )
 }
 
 export async function createPerson(
@@ -473,6 +627,60 @@ export async function createPerson(
   }
 
   return await getPersonSummary(client, personId)
+}
+
+export async function updatePerson(
+  client: HulyClient,
+  id: string,
+  updates: {
+    name?: string
+    city?: string | null
+    email?: string | null
+  }
+): Promise<PersonSummary> {
+  const person = await getPersonById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.name !== undefined) {
+    operations.name = updates.name
+  }
+
+  if (updates.city !== undefined) {
+    operations.city = updates.city ?? ''
+  }
+
+  if (Object.keys(operations).length > 0) {
+    await client.updateDoc(contact.class.Person, contact.space.Contacts, person._id, operations as never)
+  }
+
+  if (updates.email !== undefined) {
+    await syncPersonEmail(client, person._id, updates.email)
+  }
+
+  if (Object.keys(operations).length === 0 && updates.email === undefined) {
+    throw new CliError('VALIDATION_ERROR', 'No person fields were provided to update.', 4)
+  }
+
+  return await getPersonSummary(client, id)
+}
+
+export async function deletePerson(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const person = await getPersonById(client, id)
+  const [channels, identities] = await Promise.all([
+    client.findAll(contact.class.Channel, { attachedTo: person._id as never }, { limit: 100 }),
+    client.findAll(contact.class.SocialIdentity, { attachedTo: person._id as never }, { limit: 100 })
+  ])
+
+  for (const channel of channels) {
+    await client.removeDoc(contact.class.Channel, channel.space as never, channel._id as never)
+  }
+
+  for (const identity of identities) {
+    await client.removeDoc(contact.class.SocialIdentity, identity.space as never, identity._id as never)
+  }
+
+  await client.removeDoc(contact.class.Person, contact.space.Contacts, person._id)
+  return { deleted: true, id }
 }
 
 async function findPersonByEmail(client: HulyClient, email: string) {
@@ -581,6 +789,16 @@ async function getLabelByTitle(client: HulyClient, title: string): Promise<TagEl
   return label
 }
 
+async function getLabelById(client: HulyClient, id: string): Promise<TagElement> {
+  const label = await client.findOne(tags.class.TagElement, { _id: id as Ref<TagElement> })
+
+  if (!label || label.targetClass !== tracker.class.Issue) {
+    throw new CliError('NOT_FOUND', `Label '${id}' not found`, 3)
+  }
+
+  return label
+}
+
 async function assignLabelReference(client: HulyClient, issue: Issue, label: TagElement): Promise<void> {
   const existing = await client.findOne(tags.class.TagReference, {
     attachedTo: issue._id as never,
@@ -603,6 +821,19 @@ async function assignLabelReference(client: HulyClient, issue: Issue, label: Tag
       color: label.color
     } as never
   )
+}
+
+async function removeLabelReference(client: HulyClient, issue: Issue, label: TagElement): Promise<void> {
+  const existing = await client.findOne(tags.class.TagReference, {
+    attachedTo: issue._id as never,
+    tag: label._id as never
+  })
+
+  if (!existing) {
+    return
+  }
+
+  await client.removeDoc(tags.class.TagReference, issue.space as Ref<any>, existing._id)
 }
 
 async function assignLabelsByTitle(client: HulyClient, issue: Issue, titles: string[]): Promise<void> {
@@ -656,6 +887,16 @@ async function mapComponentSummary(
     label: component.label,
     description
   }
+}
+
+async function getComponentById(client: HulyClient, id: string): Promise<Component> {
+  const component = await client.findOne(tracker.class.Component, { _id: id as Ref<Component> })
+
+  if (!component) {
+    throw new CliError('NOT_FOUND', `Component '${id}' not found`, 3)
+  }
+
+  return component
 }
 
 async function getAuthorNameMap(client: HulyClient, ids: string[]): Promise<Map<string, string>> {
@@ -861,6 +1102,16 @@ export async function getTeamspaceByName(client: HulyClient, name: string): Prom
   return teamspace
 }
 
+async function getTeamspaceById(client: HulyClient, id: string): Promise<Teamspace> {
+  const teamspace = await client.findOne(document.class.Teamspace, { _id: id as never })
+
+  if (!teamspace) {
+    throw new CliError('NOT_FOUND', `Teamspace '${id}' not found`, 3)
+  }
+
+  return teamspace
+}
+
 async function mapTeamspace(client: HulyClient, teamspace: Teamspace): Promise<TeamspaceSummary> {
   const spaceType = teamspace.type
     ? await client.findOne(core.class.SpaceType, { _id: teamspace.type })
@@ -869,7 +1120,7 @@ async function mapTeamspace(client: HulyClient, teamspace: Teamspace): Promise<T
   return {
     id: teamspace._id,
     name: teamspace.name,
-    description: teamspace.description ?? null,
+    description: normalizeOptionalString(teamspace.description),
     private: teamspace.private,
     archived: teamspace.archived,
     type: spaceType?.name ?? null
@@ -905,12 +1156,42 @@ async function mapDocument(
   }
 }
 
-export async function listTeamspaces(client: HulyClient): Promise<TeamspaceSummary[]> {
-  const teamspaces = await client.findAll(document.class.Teamspace, {}, {
+export async function listTeamspaces(
+  client: HulyClient,
+  options: {
+    name?: string
+    private?: boolean
+    archived?: boolean
+    limit?: number
+  } = {}
+): Promise<TeamspaceSummary[]> {
+  const teamspaces = await client.findAll(document.class.Teamspace, {} as never, {
+    limit: Math.max(options.limit ?? 100, 100),
+    showArchived: options.archived !== undefined,
     sort: { name: SortingOrder.Ascending }
   })
 
-  return await Promise.all(teamspaces.map(async (teamspace) => await mapTeamspace(client, teamspace)))
+  const filtered = teamspaces.filter((teamspace) => {
+    if (options.name !== undefined && teamspace.name !== options.name) {
+      return false
+    }
+
+    if (options.private !== undefined && Boolean(teamspace.private) !== options.private) {
+      return false
+    }
+
+    if (options.archived !== undefined && Boolean(teamspace.archived) !== options.archived) {
+      return false
+    }
+
+    return true
+  }).slice(0, options.limit)
+
+  return await Promise.all(filtered.map(async (teamspace) => await mapTeamspace(client, teamspace)))
+}
+
+export async function getTeamspaceSummary(client: HulyClient, id: string): Promise<TeamspaceSummary> {
+  return await mapTeamspace(client, await getTeamspaceById(client, id))
 }
 
 export async function createTeamspace(
@@ -954,6 +1235,56 @@ export async function createTeamspace(
   return await mapTeamspace(client, teamspace)
 }
 
+export async function updateTeamspace(
+  client: HulyClient,
+  id: string,
+  updates: {
+    name?: string
+    description?: string
+    private?: boolean
+    archived?: boolean
+  }
+): Promise<TeamspaceSummary> {
+  const teamspace = await getTeamspaceById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.name !== undefined) {
+    const existing = await client.findOne(document.class.Teamspace, { name: updates.name as never })
+    if (existing && existing._id !== teamspace._id) {
+      throw new CliError('VALIDATION_ERROR', `Teamspace '${updates.name}' already exists`, 4)
+    }
+
+    operations.name = updates.name
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description
+  }
+
+  if (updates.private !== undefined) {
+    operations.private = updates.private
+    operations.autoJoin = !updates.private
+    operations.restricted = updates.private
+  }
+
+  if (updates.archived !== undefined) {
+    operations.archived = updates.archived
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No teamspace fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(document.class.Teamspace, core.space.Space, teamspace._id, operations as never)
+  return await getTeamspaceSummary(client, id)
+}
+
+export async function deleteTeamspace(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const teamspace = await getTeamspaceById(client, id)
+  await client.removeDoc(document.class.Teamspace, core.space.Space, teamspace._id)
+  return { deleted: true, id }
+}
+
 export async function getDocumentById(client: HulyClient, id: string): Promise<HulyDocument> {
   const doc = await client.findOne(document.class.Document, { _id: id as Ref<HulyDocument> })
 
@@ -964,10 +1295,30 @@ export async function getDocumentById(client: HulyClient, id: string): Promise<H
   return doc
 }
 
+async function resolveDocumentParent(
+  client: HulyClient,
+  teamspaceId: string,
+  parentId: string | null
+): Promise<Ref<HulyDocument>> {
+  if (parentId === null) {
+    return document.ids.NoParent as Ref<HulyDocument>
+  }
+
+  const parent = await getDocumentById(client, parentId)
+
+  if (parent.space !== teamspaceId) {
+    throw new CliError('VALIDATION_ERROR', `Document '${parentId}' does not belong to the target teamspace.`, 4)
+  }
+
+  return parent._id
+}
+
 export async function listDocuments(
   client: HulyClient,
   options: {
     teamspaceName: string
+    title?: string
+    parentId?: string | null
     limit?: number
     sort?: string
   }
@@ -975,8 +1326,17 @@ export async function listDocuments(
   const teamspace = await getTeamspaceByName(client, options.teamspaceName)
   const sortField = options.sort && options.sort.startsWith('-') ? options.sort.slice(1) : options.sort ?? 'modifiedOn'
   const sortDirection = options.sort?.startsWith('-') ? SortingOrder.Descending : SortingOrder.Ascending
+  const query: Record<string, unknown> = { space: teamspace._id }
 
-  const docs = await client.findAll(document.class.Document, { space: teamspace._id }, {
+  if (options.title !== undefined) {
+    query.title = options.title
+  }
+
+  if (options.parentId !== undefined) {
+    query.parent = await resolveDocumentParent(client, teamspace._id, options.parentId)
+  }
+
+  const docs = await client.findAll(document.class.Document, query as never, {
     limit: options.limit ?? 20,
     sort: {
       [sortField]: sortDirection
@@ -991,16 +1351,46 @@ export async function getDocumentSummary(client: HulyClient, id: string): Promis
   return await mapDocument(client, doc, true)
 }
 
+async function waitForDocumentSummary(id: string, expectedParentId?: string | null): Promise<DocumentSummary> {
+  const { client } = await connectClient()
+
+  try {
+    let lastSummary: DocumentSummary | undefined
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      try {
+        lastSummary = await getDocumentSummary(client, id)
+
+        if (expectedParentId === undefined || lastSummary.parentId === expectedParentId) {
+          return lastSummary
+        }
+      } catch (error) {
+        if (!(error instanceof CliError) || error.code !== 'NOT_FOUND') {
+          throw error
+        }
+      }
+
+      await sleep(1000)
+    }
+
+    return lastSummary ?? await getDocumentSummary(client, id)
+  } finally {
+    await client.close()
+  }
+}
+
 export async function createDocument(
   client: HulyClient,
   options: {
     teamspaceName: string
     title: string
     content?: string
+    parentId?: string
   }
 ): Promise<DocumentSummary> {
   const teamspace = await getTeamspaceByName(client, options.teamspaceName)
-  const lastRank = await getFirstRank(client as never, teamspace._id, document.ids.NoParent, SortingOrder.Descending)
+  const parentId = await resolveDocumentParent(client, teamspace._id, options.parentId ?? null)
+  const lastRank = await getFirstRank(client as never, teamspace._id, parentId, SortingOrder.Descending)
   const docId = generateId<HulyDocument>()
 
   await client.createDoc(
@@ -1009,13 +1399,13 @@ export async function createDocument(
     {
       title: options.title,
       content: options.content ? markdown(options.content) : null,
-      parent: document.ids.NoParent,
+      parent: parentId,
       rank: makeRank(lastRank, undefined)
     } as never,
     docId
   )
 
-  return await getDocumentSummary(client, docId)
+  return await waitForDocumentSummary(docId, parentId === document.ids.NoParent ? null : parentId)
 }
 
 export async function updateDocument(
@@ -1024,6 +1414,7 @@ export async function updateDocument(
   updates: {
     title?: string
     content?: string
+    parentId?: string | null
   }
 ): Promise<DocumentSummary> {
   const doc = await getDocumentById(client, id)
@@ -1037,11 +1428,28 @@ export async function updateDocument(
     operations.content = markdown(updates.content)
   }
 
+  if (updates.parentId !== undefined) {
+    const parentId = await resolveDocumentParent(client, doc.space as string, updates.parentId)
+
+    if (parentId === doc._id) {
+      throw new CliError('VALIDATION_ERROR', 'A document cannot be its own parent.', 4)
+    }
+
+    operations.parent = parentId
+    const lastRank = await getFirstRank(client as never, doc.space, parentId, SortingOrder.Descending)
+    operations.rank = makeRank(lastRank, undefined)
+  }
+
   if (Object.keys(operations).length === 0) {
     throw new CliError('VALIDATION_ERROR', 'No document fields were provided to update.', 4)
   }
 
   await client.updateDoc(document.class.Document, doc.space, doc._id, operations as never)
+
+  if (updates.parentId !== undefined) {
+    return await waitForDocumentSummary(id, updates.parentId)
+  }
+
   return await getDocumentSummary(client, id)
 }
 
@@ -1103,7 +1511,7 @@ async function mapIssueTemplates(client: HulyClient, templates: IssueTemplate[])
   const [projects, assignees, components, milestones, labels] = await Promise.all([
     projectIds.length > 0
       ? client.findAll(tracker.class.Project, { _id: { $in: projectIds as never[] } }, { limit: projectIds.length })
-      : Promise.resolve([]),
+      : Promise.resolve([] as Project[]),
     assigneeIds.length > 0
       ? client.findAll(contact.class.Person, { _id: { $in: assigneeIds as never[] } }, { limit: assigneeIds.length })
       : Promise.resolve([]),
@@ -1115,7 +1523,7 @@ async function mapIssueTemplates(client: HulyClient, templates: IssueTemplate[])
       : Promise.resolve([]),
     labelIds.length > 0
       ? client.findAll(tags.class.TagElement, { _id: { $in: labelIds as never[] } }, { limit: labelIds.length })
-      : Promise.resolve([])
+      : Promise.resolve([] as TagElement[])
   ])
 
   const projectById = new Map(projects.map((project) => [project._id as string, project]))
@@ -1524,6 +1932,68 @@ export async function createLabel(
   return mapLabelSummary(label)
 }
 
+export async function getLabelSummary(client: HulyClient, id: string): Promise<LabelSummary> {
+  return mapLabelSummary(await getLabelById(client, id))
+}
+
+export async function updateLabel(
+  client: HulyClient,
+  id: string,
+  updates: {
+    title?: string
+    color?: number
+    description?: string
+  }
+): Promise<LabelSummary> {
+  const label = await getLabelById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.title !== undefined) {
+    const existing = await client.findAll(tags.class.TagElement, { targetClass: tracker.class.Issue }, {
+      limit: 500,
+      sort: { title: SortingOrder.Ascending }
+    })
+
+    if (existing.some((entry) => entry._id !== label._id && normalizeString(entry.title) === normalizeString(updates.title!))) {
+      throw new CliError('VALIDATION_ERROR', `Label '${updates.title}' already exists`, 4)
+    }
+
+    operations.title = updates.title
+  }
+
+  if (updates.color !== undefined) {
+    operations.color = updates.color
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No label fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(tags.class.TagElement, core.space.Space, label._id, operations as never)
+  return await getLabelSummary(client, id)
+}
+
+export async function deleteLabel(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const label = await getLabelById(client, id)
+  const references = await client.findAll(tags.class.TagReference, {
+    tag: label._id as never
+  }, {
+    limit: 10000,
+    sort: { createdOn: SortingOrder.Descending }
+  })
+
+  for (const reference of references) {
+    await client.removeDoc(tags.class.TagReference, reference.space, reference._id)
+  }
+
+  await client.removeDoc(tags.class.TagElement, core.space.Space, label._id)
+  return { deleted: true, id }
+}
+
 export async function assignLabelToIssue(
   client: HulyClient,
   identifier: string,
@@ -1535,6 +2005,22 @@ export async function assignLabelToIssue(
 
   return {
     assigned: true,
+    issue: identifier,
+    label: label.title
+  }
+}
+
+export async function unassignLabelFromIssue(
+  client: HulyClient,
+  identifier: string,
+  labelTitle: string
+): Promise<{ unassigned: true, issue: string, label: string }> {
+  const issue = await getIssueByIdentifier(client, identifier)
+  const label = await getLabelByTitle(client, labelTitle)
+  await removeLabelReference(client, issue, label)
+
+  return {
+    unassigned: true,
     issue: identifier,
     label: label.title
   }
@@ -1582,6 +2068,52 @@ export async function createComponent(
   }
 
   return await mapComponentSummary(client, component)
+}
+
+export async function getComponentSummary(client: HulyClient, id: string): Promise<ComponentSummary> {
+  return await mapComponentSummary(client, await getComponentById(client, id))
+}
+
+export async function updateComponent(
+  client: HulyClient,
+  id: string,
+  updates: {
+    label?: string
+    description?: string
+  }
+): Promise<ComponentSummary> {
+  const component = await getComponentById(client, id)
+  const operations: Record<string, unknown> = {}
+
+  if (updates.label !== undefined) {
+    const existing = await client.findAll(tracker.class.Component, { space: component.space }, {
+      limit: 500,
+      sort: { label: SortingOrder.Ascending }
+    })
+
+    if (existing.some((entry) => entry._id !== component._id && normalizeString(entry.label) === normalizeString(updates.label!))) {
+      throw new CliError('VALIDATION_ERROR', `Component '${updates.label}' already exists in this project`, 4)
+    }
+
+    operations.label = updates.label
+  }
+
+  if (updates.description !== undefined) {
+    operations.description = updates.description ? markdown(updates.description) : null
+  }
+
+  if (Object.keys(operations).length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'No component fields were provided to update.', 4)
+  }
+
+  await client.updateDoc(tracker.class.Component, component.space, component._id, operations as never)
+  return await getComponentSummary(client, id)
+}
+
+export async function deleteComponent(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
+  const component = await getComponentById(client, id)
+  await client.removeDoc(tracker.class.Component, component.space, component._id)
+  return { deleted: true, id }
 }
 
 export async function listComments(client: HulyClient, target: string): Promise<CommentSummary[]> {
@@ -1671,19 +2203,31 @@ export async function listNotifications(
     limit?: number
     isViewed?: boolean
     archived?: boolean
+    className?: string
+    objectClass?: string
+    objectId?: string
+    type?: string
   }
 ): Promise<NotificationSummary[]> {
   const account = await client.getAccount()
   const notifications = await client.findAll(notification.class.InboxNotification, {
     user: account.uuid as never,
     ...(options.isViewed === undefined ? {} : { isViewed: options.isViewed as never }),
-    ...(options.archived === undefined ? {} : { archived: options.archived as never })
+    ...(options.archived === undefined ? {} : { archived: options.archived as never }),
+    ...(options.className === undefined ? {} : { _class: options.className as never }),
+    ...(options.objectClass === undefined ? {} : { objectClass: options.objectClass as never }),
+    ...(options.objectId === undefined ? {} : { objectId: options.objectId as never })
   }, {
-    limit: options.limit ?? 20,
+    limit: options.type === undefined ? (options.limit ?? 20) : Math.max(options.limit ?? 20, 200),
     sort: { modifiedOn: SortingOrder.Descending }
   })
 
-  return notifications.map((notificationDoc) => mapNotificationSummary(notificationDoc))
+  const summaries = notifications.map((notificationDoc) => mapNotificationSummary(notificationDoc))
+  const filtered = options.type === undefined
+    ? summaries
+    : summaries.filter((notificationDoc) => notificationDoc.types.includes(options.type!))
+
+  return filtered.slice(0, options.limit ?? filtered.length)
 }
 
 export async function getNotificationSummary(client: HulyClient, id: string): Promise<NotificationSummary> {
@@ -1820,7 +2364,11 @@ export async function listTimeTodos(
   options: {
     issueIdentifier?: string
     assignee?: string
+    title?: string
+    priority?: string
     isDone?: boolean
+    dueDateFrom?: string
+    dueDateTo?: string
     limit?: number
   }
 ): Promise<TimeTodoSummary[]> {
@@ -1838,10 +2386,32 @@ export async function listTimeTodos(
     query.user = await resolveEmployeeRef(client, options.assignee)
   }
 
+  if (options.title !== undefined) {
+    query.title = options.title
+  }
+
+  if (options.priority !== undefined) {
+    query.priority = parseTodoPriority(options.priority)
+  }
+
   if (options.isDone === true) {
     query.doneOn = { $gt: 0 }
   } else if (options.isDone === false) {
     query.doneOn = null
+  }
+
+  const dueDateFilters: Record<string, number> = {}
+
+  if (options.dueDateFrom !== undefined) {
+    dueDateFilters.$gte = new Date(options.dueDateFrom).getTime()
+  }
+
+  if (options.dueDateTo !== undefined) {
+    dueDateFilters.$lte = new Date(options.dueDateTo).getTime()
+  }
+
+  if (Object.keys(dueDateFilters).length > 0) {
+    query.dueDate = dueDateFilters
   }
 
   const todos = await client.findAll(time.class.ToDo, query as never, {
@@ -2015,8 +2585,11 @@ async function buildTimeReportQuery(
   options: {
     issueIdentifier?: string
     assignee?: string
+    description?: string
     dateFrom?: string
     dateTo?: string
+    valueFrom?: number
+    valueTo?: number
   }
 ): Promise<Record<string, unknown>> {
   const query: Record<string, unknown> = {
@@ -2033,6 +2606,10 @@ async function buildTimeReportQuery(
     query.employee = await resolveEmployeeRef(client, options.assignee)
   }
 
+  if (options.description !== undefined) {
+    query.description = options.description
+  }
+
   const dateFilters: Record<string, number> = {}
 
   if (options.dateFrom !== undefined) {
@@ -2047,6 +2624,20 @@ async function buildTimeReportQuery(
     query.date = dateFilters
   }
 
+  const valueFilters: Record<string, number> = {}
+
+  if (options.valueFrom !== undefined) {
+    valueFilters.$gte = options.valueFrom
+  }
+
+  if (options.valueTo !== undefined) {
+    valueFilters.$lte = options.valueTo
+  }
+
+  if (Object.keys(valueFilters).length > 0) {
+    query.value = valueFilters
+  }
+
   return query
 }
 
@@ -2055,8 +2646,11 @@ async function findTimeReports(
   options: {
     issueIdentifier?: string
     assignee?: string
+    description?: string
     dateFrom?: string
     dateTo?: string
+    valueFrom?: number
+    valueTo?: number
     limit?: number
   }
 ): Promise<TimeSpendReport[]> {
@@ -2076,8 +2670,11 @@ export async function listTimeReports(
   options: {
     issueIdentifier?: string
     assignee?: string
+    description?: string
     dateFrom?: string
     dateTo?: string
+    valueFrom?: number
+    valueTo?: number
     limit?: number
   }
 ): Promise<TimeReportSummary[]> {
@@ -2094,12 +2691,16 @@ export async function getTimeReportTotals(
   options: {
     issueIdentifier?: string
     assignee?: string
+    description?: string
     dateFrom?: string
     dateTo?: string
+    valueFrom?: number
+    valueTo?: number
   }
 ): Promise<TimeReportTotalsSummary> {
   const reports = await mapTimeReports(client, await findTimeReports(client, options))
   const byIssue = new Map<string, { issue: string | null, issueId: string | null, reportCount: number, totalValue: number }>()
+  const byDate = new Map<string, { date: string | null, reportCount: number, totalValue: number }>()
   const byEmployee = new Map<string, { employee: string | null, employeeEmail: string | null, employeeId: string | null, reportCount: number, totalValue: number }>()
 
   for (const report of reports) {
@@ -2113,6 +2714,17 @@ export async function getTimeReportTotals(
     issueEntry.reportCount += 1
     issueEntry.totalValue += report.value
     byIssue.set(issueKey, issueEntry)
+
+    const dateBucket = report.date ? report.date.slice(0, 10) : null
+    const dateKey = dateBucket ?? '__none__'
+    const dateEntry = byDate.get(dateKey) ?? {
+      date: dateBucket,
+      reportCount: 0,
+      totalValue: 0
+    }
+    dateEntry.reportCount += 1
+    dateEntry.totalValue += report.value
+    byDate.set(dateKey, dateEntry)
 
     const employeeKey = report.employeeId ?? '__none__'
     const employeeEntry = byEmployee.get(employeeKey) ?? {
@@ -2133,10 +2745,28 @@ export async function getTimeReportTotals(
     filters: {
       issue: options.issueIdentifier ?? null,
       assignee: options.assignee ?? null,
+      description: options.description ?? null,
+      valueFrom: options.valueFrom ?? null,
+      valueTo: options.valueTo ?? null,
       dateFrom: options.dateFrom ?? null,
       dateTo: options.dateTo ?? null
     },
     byIssue: [...byIssue.values()].sort((left, right) => right.totalValue - left.totalValue || right.reportCount - left.reportCount),
+    byDate: [...byDate.values()].sort((left, right) => {
+      if (left.date === right.date) {
+        return right.totalValue - left.totalValue || right.reportCount - left.reportCount
+      }
+
+      if (left.date === null) {
+        return 1
+      }
+
+      if (right.date === null) {
+        return -1
+      }
+
+      return right.date.localeCompare(left.date)
+    }),
     byEmployee: [...byEmployee.values()].sort((left, right) => right.totalValue - left.totalValue || right.reportCount - left.reportCount)
   }
 }
@@ -2587,8 +3217,8 @@ export async function updateCardType(
   updates: {
     label?: string
     extends?: string
-    color?: number
-    background?: number
+    color?: number | null
+    background?: number | null
     removed?: boolean
   }
 ): Promise<CardTypeSummary> {
@@ -2741,13 +3371,20 @@ export async function deleteCardRole(client: HulyClient, id: string): Promise<{ 
 export async function listCards(
   client: HulyClient,
   options: {
+    title?: string
     type?: string
     parentId?: string | null
+    readonly?: boolean
     limit?: number
   }
 ): Promise<CardSummary[]> {
   const query: Record<string, unknown> = {
     space: card.space.Default
+  }
+  const requiresEditableFilter = options.readonly === false
+
+  if (options.title !== undefined) {
+    query.title = options.title
   }
 
   if (options.type !== undefined) {
@@ -2758,14 +3395,22 @@ export async function listCards(
     query.parent = options.parentId === null ? null : (await getCardById(client, options.parentId))._id
   }
 
+  if (options.readonly === true) {
+    query.readonly = options.readonly
+  }
+
   const cards = await client.findAll(card.class.Card, query as never, {
-    limit: options.limit ?? 20,
+    limit: requiresEditableFilter ? Math.max(options.limit ?? 20, 200) : options.limit ?? 20,
     sort: options.parentId !== undefined
       ? { rank: SortingOrder.Ascending }
       : { modifiedOn: SortingOrder.Descending }
   })
 
-  return await mapCards(client, cards, { includeContent: false })
+  const filteredCards = requiresEditableFilter
+    ? cards.filter((entry) => entry.readonly !== true).slice(0, options.limit ?? 20)
+    : cards
+
+  return await mapCards(client, filteredCards, { includeContent: false })
 }
 
 export async function getCardSummary(client: HulyClient, id: string): Promise<CardSummary> {
@@ -3227,25 +3872,59 @@ async function waitForThreadMessageSummary(id: string, expectedMessage: string):
 export async function listChatSpaces(
   client: HulyClient,
   options: {
+    name?: string
+    memberEmail?: string
+    private?: boolean
+    archived?: boolean
+    kind?: 'channel' | 'direct' | 'all'
     includeDirect?: boolean
     limit?: number
   }
 ): Promise<ChatSpaceSummary[]> {
   const limit = options.limit ?? 20
+  const query: Record<string, unknown> = {}
+  const kind = options.kind ?? (options.includeDirect ? 'all' : 'channel')
+  const includeChannels = kind !== 'direct'
+  const includeDirects = kind !== 'channel'
+  const memberAccountUuid = options.memberEmail === undefined
+    ? undefined
+    : await resolveChatMemberAccountUuid(client, options.memberEmail)
+  const memberAccountUuidValue = memberAccountUuid === undefined ? undefined : String(memberAccountUuid)
+
+  if (options.name !== undefined) {
+    query.name = options.name
+  }
+
+  if (options.private !== undefined) {
+    query.private = options.private
+  }
+
+  if (options.archived !== undefined) {
+    query.archived = options.archived
+  }
+
   const [channels, directs] = await Promise.all([
-    client.findAll(chunter.class.Channel, {}, {
-      limit,
-      sort: { modifiedOn: SortingOrder.Descending }
-    }),
-    options.includeDirect
-      ? client.findAll(chunter.class.DirectMessage, {}, {
+    includeChannels
+      ? client.findAll(chunter.class.Channel, query as never, {
           limit,
-          sort: { modifiedOn: SortingOrder.Descending }
+          sort: { modifiedOn: SortingOrder.Descending },
+          ...(options.archived === true ? { showArchived: true } : {})
         })
-      : Promise.resolve([])
+      : Promise.resolve([] as HulyChatChannel[]),
+    includeDirects
+      ? client.findAll(chunter.class.DirectMessage, query as never, {
+          limit,
+          sort: { modifiedOn: SortingOrder.Descending },
+          ...(options.archived === true ? { showArchived: true } : {})
+        })
+      : Promise.resolve([] as HulyDirectMessage[])
   ])
 
-  return [...channels, ...directs]
+  const spaces = memberAccountUuidValue === undefined
+    ? [...channels, ...directs]
+    : [...channels, ...directs].filter((space) => Array.isArray(space.members) && space.members.some((member) => String(member) === memberAccountUuidValue))
+
+  return spaces
     .sort((left, right) => (right.modifiedOn ?? 0) - (left.modifiedOn ?? 0))
     .slice(0, limit)
     .map((space) => mapChatSpaceSummary(space))
@@ -3334,8 +4013,8 @@ export async function updateChatChannel(
   id: string,
   updates: {
     name?: string
-    topic?: string
-    description?: string
+    topic?: string | null
+    description?: string | null
     private?: boolean
     archived?: boolean
   }
@@ -3349,11 +4028,11 @@ export async function updateChatChannel(
   }
 
   if (updates.topic !== undefined) {
-    operations.topic = updates.topic
+    operations.topic = updates.topic ?? ''
   }
 
   if (updates.description !== undefined) {
-    operations.description = updates.description
+    operations.description = updates.description ?? ''
   }
 
   if (updates.private !== undefined) {
@@ -3627,6 +4306,17 @@ async function findPersonNames(client: HulyClient, ids: Array<string | null | un
   return new Map(persons.map((person) => [person._id as string, person.name]))
 }
 
+async function findEmployeeNames(client: HulyClient, ids: Array<string | null | undefined>): Promise<Map<string, string>> {
+  const resolvedIds = Array.from(new Set(ids.filter((value): value is string => typeof value === 'string' && value.length > 0)))
+
+  if (resolvedIds.length === 0) {
+    return new Map()
+  }
+
+  const employees = await client.findAll(contact.mixin.Employee, { _id: { $in: resolvedIds as never[] } }, { limit: resolvedIds.length })
+  return new Map(employees.map((employee) => [employee._id as string, employee.name]))
+}
+
 async function findDepartmentNames(client: HulyClient, ids: Array<string | null | undefined>): Promise<Map<string, string>> {
   const resolvedIds = Array.from(new Set(ids.filter((value): value is string => typeof value === 'string' && value.length > 0)))
 
@@ -3658,11 +4348,23 @@ async function getBoardCardById(client: HulyClient, id: string): Promise<any> {
   return entry
 }
 
+async function getEmployeeById(client: HulyClient, id: string): Promise<any> {
+  const employee = await client.findOne(contact.mixin.Employee, { _id: id as never })
+
+  if (!employee) {
+    throw new CliError('NOT_FOUND', `Member '${id}' not found`, 3)
+  }
+
+  return employee
+}
+
 function mapBoardSummary(entry: any): BoardSummary {
   return {
     id: entry._id,
     name: entry.name,
     description: normalizeUnknownString(entry.description),
+    color: typeof entry.color === 'number' ? entry.color : null,
+    background: normalizeUnknownString(entry.background),
     private: Boolean(entry.private),
     archived: Boolean(entry.archived),
     type: normalizeUnknownString(entry.type),
@@ -3671,13 +4373,37 @@ function mapBoardSummary(entry: any): BoardSummary {
   }
 }
 
-export async function listBoards(client: HulyClient): Promise<BoardSummary[]> {
+export async function listBoards(
+  client: HulyClient,
+  options: {
+    name?: string
+    private?: boolean
+    archived?: boolean
+  } = {}
+): Promise<BoardSummary[]> {
   const entries = await client.findAll(board.class.Board as any, {}, {
     limit: 100,
-    sort: { name: SortingOrder.Ascending }
+    sort: { name: SortingOrder.Ascending },
+    showArchived: options.archived !== undefined
   })
 
-  return entries.map((entry) => mapBoardSummary(entry))
+  return (entries as any[])
+    .filter((entry) => {
+      if (options.name !== undefined && entry.name !== options.name) {
+        return false
+      }
+
+      if (options.private !== undefined && Boolean(entry.private) !== options.private) {
+        return false
+      }
+
+      if (options.archived !== undefined && Boolean(entry.archived) !== options.archived) {
+        return false
+      }
+
+      return true
+    })
+    .map((entry) => mapBoardSummary(entry))
 }
 
 export async function getBoardSummary(client: HulyClient, id: string): Promise<BoardSummary> {
@@ -3689,12 +4415,16 @@ export async function createBoard(
   options: {
     name: string
     description?: string
+    color?: number
+    background?: string
     private?: boolean
   }
 ): Promise<BoardSummary> {
   const id = await client.createDoc(board.class.Board as any, core.space.Space, {
     name: options.name,
     description: options.description ?? '',
+    ...(options.color === undefined ? {} : { color: options.color }),
+    ...(options.background === undefined ? {} : { background: options.background }),
     type: 'board:template:DefaultBoard',
     private: options.private ?? false,
     archived: false,
@@ -3710,6 +4440,8 @@ export async function updateBoard(
   updates: {
     name?: string
     description?: string
+    color?: number | null
+    background?: string | null
     private?: boolean
     archived?: boolean
   }
@@ -3723,6 +4455,14 @@ export async function updateBoard(
 
   if (updates.description !== undefined) {
     operations.description = updates.description
+  }
+
+  if (updates.color !== undefined) {
+    operations.color = updates.color
+  }
+
+  if (updates.background !== undefined) {
+    operations.background = updates.background
   }
 
   if (updates.private !== undefined) {
@@ -3800,16 +4540,18 @@ async function mapBoardCardSummaries(
       .filter((value): value is string => value !== null)
   ))
   const assigneeIds = cards.map((cardDoc) => normalizeUnknownRef(cardDoc.assignee))
+  const memberIds = cards.flatMap((cardDoc) => Array.isArray(cardDoc.members) ? cardDoc.members.map((member: unknown) => String(member)) : [])
   const statusIds = Array.from(new Set(
     cards
       .map((cardDoc) => normalizeUnknownString(cardDoc.status))
       .filter((value): value is string => value !== null)
   ))
-  const [boards, assigneeNames, statusMetadata] = await Promise.all([
+  const [boards, assigneeNames, employeeNames, statusMetadata] = await Promise.all([
     boardIds.length > 0
       ? client.findAll(board.class.Board as any, { _id: { $in: boardIds as never[] } }, { limit: boardIds.length })
       : Promise.resolve([]),
     findPersonNames(client, assigneeIds),
+    findEmployeeNames(client, memberIds),
     fetchBoardStatusMetadata(client, statusIds)
   ])
   const boardNameById = new Map<string, string>(boards.map((entry) => [entry._id as string, (entry as any).name as string]))
@@ -3835,6 +4577,12 @@ async function mapBoardCardSummaries(
       description: options.includeDescription && cardDoc.description
         ? await client.fetchMarkup(board.class.Card as any, cardDoc._id, 'description', cardDoc.description as never, 'markdown')
         : null,
+      coverColor: typeof cardDoc.cover?.color === 'number' ? cardDoc.cover.color : null,
+      coverSize: cardDoc.cover?.size === 'large' || cardDoc.cover?.size === 'small' ? cardDoc.cover.size : null,
+      memberIds: Array.isArray(cardDoc.members) ? cardDoc.members.map((member: unknown) => String(member)) : [],
+      memberNames: Array.isArray(cardDoc.members)
+        ? cardDoc.members.map((member: unknown) => employeeNames.get(String(member))).filter((value: string | undefined): value is string => value !== undefined)
+        : [],
       status: statusId,
       statusName: statusId ? statusMetadata.statusNameById.get(statusId) ?? statusId : null,
       statusCategoryId,
@@ -3915,19 +4663,76 @@ export async function listBoardColumns(
   })
 }
 
+export async function getBoardColumnSummary(
+  client: HulyClient,
+  options: {
+    boardId: string
+    status: string | null
+    cardsLimit?: number
+  }
+): Promise<BoardColumnDetailSummary> {
+  const boardDoc = await getBoardById(client, options.boardId)
+  const query: Record<string, unknown> = {
+    attachedTo: boardDoc._id
+  }
+
+  query.status = options.status ?? ''
+
+  const cards = await client.findAll(board.class.Card as any, query as never, {
+    limit: 5000,
+    sort: { rank: SortingOrder.Ascending }
+  })
+  const summaries = await mapBoardCardSummaries(client, cards, { includeDescription: false })
+  let statusName: string | null = null
+  let statusCategoryId: string | null = null
+  let statusCategory: string | null = null
+
+  if (options.status !== null) {
+    const statusId = options.status as string
+    const metadata = await fetchBoardStatusMetadata(client, [statusId])
+    statusCategoryId = metadata.statusCategoryIdById.get(statusId) ?? null
+    statusName = metadata.statusNameById.get(statusId) ?? statusId
+    statusCategory = statusCategoryId ? metadata.statusCategoryNameById.get(statusCategoryId) ?? statusCategoryId : null
+  }
+
+  return {
+    boardId: boardDoc._id,
+    boardName: boardDoc.name ?? null,
+    status: options.status,
+    statusName,
+    statusCategoryId,
+    statusCategory,
+    cardCount: summaries.length,
+    cards: summaries.slice(0, options.cardsLimit ?? 20)
+  }
+}
+
 export async function listBoardCards(
   client: HulyClient,
   options: {
     boardId?: string
+    title?: string
+    location?: string
     status?: string | null
     assigneeId?: string | null
+    memberId?: string
+    archived?: boolean
     limit?: number
   }
 ): Promise<BoardCardSummary[]> {
   const query: Record<string, unknown> = {}
+  const requiresActiveFilter = options.archived === false
 
   if (options.boardId !== undefined) {
     query.attachedTo = (await getBoardById(client, options.boardId))._id
+  }
+
+  if (options.title !== undefined) {
+    query.title = options.title
+  }
+
+  if (options.location !== undefined) {
+    query.location = options.location
   }
 
   if (options.status !== undefined) {
@@ -3940,6 +4745,14 @@ export async function listBoardCards(
       : (await getPersonById(client, options.assigneeId))._id
   }
 
+  if (options.memberId !== undefined) {
+    query.members = (await getEmployeeById(client, options.memberId))._id
+  }
+
+  if (options.archived === true) {
+    query.isArchived = true
+  }
+
   const cards = await client.findAll(board.class.Card as any, query as never, {
     limit: options.limit ?? 20,
     sort: options.boardId !== undefined
@@ -3947,7 +4760,8 @@ export async function listBoardCards(
       : { modifiedOn: SortingOrder.Descending }
   })
 
-  return await mapBoardCardSummaries(client, cards, { includeDescription: false })
+  const summaries = await mapBoardCardSummaries(client, cards, { includeDescription: false })
+  return requiresActiveFilter ? summaries.filter((card) => card.archived === false) : summaries
 }
 
 export async function getBoardCardSummary(client: HulyClient, id: string): Promise<BoardCardSummary> {
@@ -3961,6 +4775,8 @@ export async function createBoardCard(
     boardId: string
     title: string
     description?: string
+    cover?: { color: number, size: 'small' | 'large' }
+    memberIds?: string[]
     status?: string
     assigneeId?: string
     location?: string
@@ -3972,6 +4788,9 @@ export async function createBoardCard(
   const boardDoc = await getBoardById(client, options.boardId)
   const title = requireNonEmptyString(options.title, 'Board card title')
   const assignee = options.assigneeId === undefined ? null : (await getPersonById(client, options.assigneeId))._id
+  const members = options.memberIds === undefined
+    ? []
+    : await Promise.all(options.memberIds.map(async (memberId) => (await getEmployeeById(client, memberId))._id))
   const [lastByNumber, lastByRank] = await Promise.all([
     client.findOne(board.class.Card as any, { attachedTo: boardDoc._id as never }, {
       sort: { number: SortingOrder.Descending }
@@ -3990,10 +4809,12 @@ export async function createBoardCard(
     {
       title,
       description: options.description ? markdown(options.description) : '',
+      ...(options.cover === undefined ? {} : { cover: options.cover }),
       kind: board.taskType.Card as any,
       status: options.status ? requireNonEmptyString(options.status, 'Board card status') : '',
       number: (typeof lastByNumber?.number === 'number' ? lastByNumber.number : 0) + 1,
       assignee,
+      members,
       dueDate: options.dueDate ? Date.parse(options.dueDate) : null,
       rank: makeRank(lastByRank?.rank, undefined),
       startDate: options.startDate ? Date.parse(options.startDate) : null,
@@ -4015,6 +4836,8 @@ export async function updateBoardCard(
   updates: {
     title?: string
     description?: string
+    cover?: { color: number, size: 'small' | 'large' } | null
+    memberIds?: string[] | null
     status?: string | null
     assigneeId?: string | null
     location?: string | null
@@ -4032,6 +4855,16 @@ export async function updateBoardCard(
 
   if (updates.description !== undefined) {
     operations.description = updates.description ? markdown(updates.description) : ''
+  }
+
+  if (updates.cover !== undefined) {
+    operations.cover = updates.cover
+  }
+
+  if (updates.memberIds !== undefined) {
+    operations.members = updates.memberIds === null
+      ? []
+      : await Promise.all(updates.memberIds.map(async (memberId) => (await getEmployeeById(client, memberId))._id))
   }
 
   if (updates.status !== undefined) {
@@ -4083,6 +4916,7 @@ export async function moveBoardCard(
     afterId?: string
     top?: boolean
     bottom?: boolean
+    status?: string | null
   }
 ): Promise<BoardCardSummary> {
   const cardDoc = await getBoardCardById(client, id)
@@ -4107,6 +4941,7 @@ export async function moveBoardCard(
   }
 
   let nextRank: string
+  let nextStatus = options.status
 
   if (options.beforeId !== undefined) {
     if (options.beforeId === id) {
@@ -4121,6 +4956,10 @@ export async function moveBoardCard(
     const targetIndex = siblings.findIndex((entry) => entry._id === target._id)
     if (targetIndex === -1) {
       throw new CliError('VALIDATION_ERROR', 'The --before card is outside the current board ordering window.', 4)
+    }
+
+    if (nextStatus === undefined) {
+      nextStatus = normalizeUnknownString(target.status)
     }
 
     const previous = targetIndex > 0 ? siblings[targetIndex - 1] : undefined
@@ -4140,6 +4979,10 @@ export async function moveBoardCard(
       throw new CliError('VALIDATION_ERROR', 'The --after card is outside the current board ordering window.', 4)
     }
 
+    if (nextStatus === undefined) {
+      nextStatus = normalizeUnknownString(target.status)
+    }
+
     const next = targetIndex < siblings.length - 1 ? siblings[targetIndex + 1] : undefined
     nextRank = makeRank(getRank(target, 'The --after board card'), next ? getRank(next, 'The next board card') : undefined)
   } else if (options.top) {
@@ -4154,7 +4997,13 @@ export async function moveBoardCard(
     throw new CliError('VALIDATION_ERROR', 'Provide a move target.', 4)
   }
 
-  await client.updateDoc(board.class.Card as any, core.space.Space, cardDoc._id, { rank: nextRank } as never)
+  const operations: Record<string, unknown> = { rank: nextRank }
+
+  if (nextStatus !== undefined) {
+    operations.status = nextStatus === null ? '' : requireNonEmptyString(nextStatus, 'Board card status')
+  }
+
+  await client.updateDoc(board.class.Card as any, core.space.Space, cardDoc._id, operations as never)
   return await getBoardCardSummary(client, id)
 }
 
@@ -4187,13 +5036,43 @@ function mapDriveSummary(entry: any): DriveSummary {
   }
 }
 
-export async function listDrives(client: HulyClient): Promise<DriveSummary[]> {
+export async function listDrives(
+  client: HulyClient,
+  options: {
+    name?: string
+    private?: boolean
+    archived?: boolean
+    limit?: number
+  } = {}
+): Promise<DriveSummary[]> {
+  const requestedLimit = options.limit ?? 100
   const entries = await client.findAll(DRIVE_CLASS as any, {}, {
-    limit: 100,
-    sort: { name: SortingOrder.Ascending }
+    limit: Math.max(requestedLimit, 100),
+    sort: { name: SortingOrder.Ascending },
+    showArchived: options.archived !== undefined
   })
 
-  return entries.map((entry) => mapDriveSummary(entry))
+  const summaries = (entries as any[])
+    .filter((entry) => {
+      if (options.name !== undefined && entry.name !== options.name) {
+        return false
+      }
+
+      if (options.private !== undefined && Boolean(entry.private) !== options.private) {
+        return false
+      }
+
+      if (options.archived !== undefined && Boolean(entry.archived) !== options.archived) {
+        return false
+      }
+
+      return true
+    })
+    .map((entry) => mapDriveSummary(entry))
+
+  return options.limit === undefined
+    ? summaries
+    : summaries.slice(0, options.limit)
 }
 
 export async function getDriveSummary(client: HulyClient, id: string): Promise<DriveSummary> {
@@ -4225,7 +5104,7 @@ export async function updateDrive(
   id: string,
   updates: {
     name?: string
-    description?: string
+    description?: string | null
     private?: boolean
     archived?: boolean
   }
@@ -4238,7 +5117,7 @@ export async function updateDrive(
   }
 
   if (updates.description !== undefined) {
-    operations.description = updates.description
+    operations.description = updates.description ?? ''
   }
 
   if (updates.private !== undefined) {
@@ -4285,9 +5164,27 @@ function mapDriveResourceSummary(className: string, entry: any): DriveResourceSu
   }
 }
 
-async function listDriveResources(client: HulyClient, className: string): Promise<DriveResourceSummary[]> {
-  const entries = await client.findAll(className as any, {}, {
-    limit: 100,
+async function listDriveResources(
+  client: HulyClient,
+  className: string,
+  options: {
+    title?: string
+    name?: string
+    limit?: number
+  } = {}
+): Promise<DriveResourceSummary[]> {
+  const query: Record<string, unknown> = {}
+
+  if (options.title !== undefined) {
+    query.title = options.title
+  }
+
+  if (options.name !== undefined) {
+    query.name = options.name
+  }
+
+  const entries = await client.findAll(className as any, query as never, {
+    limit: options.limit ?? 100,
     sort: { title: SortingOrder.Ascending }
   })
 
@@ -4320,7 +5217,7 @@ async function updateDriveResource(
   id: string,
   updates: {
     title?: string
-    name?: string
+    name?: string | null
   }
 ): Promise<DriveResourceSummary> {
   const entry = await getDriveResourceById(client, className, id)
@@ -4331,7 +5228,7 @@ async function updateDriveResource(
   }
 
   if (updates.name !== undefined) {
-    operations.name = updates.name
+    operations.name = updates.name ?? ''
   }
 
   if (Object.keys(operations).length === 0) {
@@ -4348,8 +5245,15 @@ async function deleteDriveResource(client: HulyClient, className: string, id: st
   return { deleted: true, id }
 }
 
-export async function listDriveFolders(client: HulyClient): Promise<DriveResourceSummary[]> {
-  return await listDriveResources(client, DRIVE_FOLDER_CLASS)
+export async function listDriveFolders(
+  client: HulyClient,
+  options: {
+    title?: string
+    name?: string
+    limit?: number
+  } = {}
+): Promise<DriveResourceSummary[]> {
+  return await listDriveResources(client, DRIVE_FOLDER_CLASS, options)
 }
 
 export async function getDriveFolderSummary(client: HulyClient, id: string): Promise<DriveResourceSummary> {
@@ -4360,7 +5264,7 @@ export async function createDriveFolder(client: HulyClient, options: { title: st
   return await createDriveResource(client, DRIVE_FOLDER_CLASS, options)
 }
 
-export async function updateDriveFolder(client: HulyClient, id: string, updates: { title?: string, name?: string }): Promise<DriveResourceSummary> {
+export async function updateDriveFolder(client: HulyClient, id: string, updates: { title?: string, name?: string | null }): Promise<DriveResourceSummary> {
   return await updateDriveResource(client, DRIVE_FOLDER_CLASS, id, updates)
 }
 
@@ -4368,8 +5272,15 @@ export async function deleteDriveFolder(client: HulyClient, id: string): Promise
   return await deleteDriveResource(client, DRIVE_FOLDER_CLASS, id)
 }
 
-export async function listDriveFiles(client: HulyClient): Promise<DriveResourceSummary[]> {
-  return await listDriveResources(client, DRIVE_FILE_CLASS)
+export async function listDriveFiles(
+  client: HulyClient,
+  options: {
+    title?: string
+    name?: string
+    limit?: number
+  } = {}
+): Promise<DriveResourceSummary[]> {
+  return await listDriveResources(client, DRIVE_FILE_CLASS, options)
 }
 
 export async function getDriveFileSummary(client: HulyClient, id: string): Promise<DriveResourceSummary> {
@@ -4380,7 +5291,7 @@ export async function createDriveFile(client: HulyClient, options: { title: stri
   return await createDriveResource(client, DRIVE_FILE_CLASS, options)
 }
 
-export async function updateDriveFile(client: HulyClient, id: string, updates: { title?: string, name?: string }): Promise<DriveResourceSummary> {
+export async function updateDriveFile(client: HulyClient, id: string, updates: { title?: string, name?: string | null }): Promise<DriveResourceSummary> {
   return await updateDriveResource(client, DRIVE_FILE_CLASS, id, updates)
 }
 
@@ -4414,6 +5325,19 @@ async function listDriveResourceActivity(
   const messages = await client.findAll('activity:class:DocUpdateMessage' as any, {
     attachedTo: entry._id as never,
     attachedToClass: className as never
+  }, {
+    limit: limit ?? 20,
+    sort: { createdOn: SortingOrder.Descending }
+  })
+
+  return messages.map((message) => mapDriveActivitySummary(message))
+}
+
+export async function listDriveActivity(client: HulyClient, id: string, limit?: number): Promise<DriveActivitySummary[]> {
+  const entry = await getDriveById(client, id)
+  const messages = await client.findAll('activity:class:DocUpdateMessage' as any, {
+    attachedTo: entry._id as never,
+    attachedToClass: DRIVE_CLASS as never
   }, {
     limit: limit ?? 20,
     sort: { createdOn: SortingOrder.Descending }
@@ -4630,13 +5554,46 @@ async function mapHrPublicHolidaySummary(client: HulyClient, holiday: any): Prom
   }
 }
 
-export async function listHrPublicHolidays(client: HulyClient, departmentId?: string): Promise<HrPublicHolidaySummary[]> {
-  const holidays = await client.findAll(hr.class.PublicHoliday as any, departmentId ? { department: departmentId as never } : {}, {
-    limit: 100,
+export async function listHrPublicHolidays(
+  client: HulyClient,
+  options: {
+    departmentId?: string
+    title?: string
+    dateFrom?: string
+    dateTo?: string
+    limit?: number
+  } = {}
+): Promise<HrPublicHolidaySummary[]> {
+  const query: Record<string, unknown> = {}
+
+  if (options.departmentId !== undefined) {
+    query.department = options.departmentId
+  }
+
+  if (options.title !== undefined) {
+    query.title = options.title
+  }
+
+  const needsDateFiltering = options.dateFrom !== undefined || options.dateTo !== undefined
+  const holidays = await client.findAll(hr.class.PublicHoliday as any, query as never, {
+    limit: needsDateFiltering ? 5000 : (options.limit ?? 100),
     sort: { createdOn: SortingOrder.Descending }
   })
 
-  return await Promise.all(holidays.map(async (holiday) => await mapHrPublicHolidaySummary(client, holiday)))
+  let summaries = await Promise.all(holidays.map(async (holiday) => await mapHrPublicHolidaySummary(client, holiday)))
+
+  if (needsDateFiltering) {
+    summaries = summaries.filter((holiday) => isIsoDayWithinRange(holiday.date, {
+      from: options.dateFrom,
+      to: options.dateTo
+    }))
+  }
+
+  if (options.limit !== undefined) {
+    summaries = summaries.slice(0, options.limit)
+  }
+
+  return summaries
 }
 
 export async function getHrPublicHolidaySummary(client: HulyClient, id: string): Promise<HrPublicHolidaySummary> {
@@ -4750,13 +5707,122 @@ async function mapHrRequestSummary(client: HulyClient, request: any): Promise<Hr
   }
 }
 
-export async function listHrRequests(client: HulyClient, employeeId?: string): Promise<HrRequestSummary[]> {
-  const requests = await client.findAll(hr.class.Request as any, employeeId ? { attachedTo: employeeId as never } : {}, {
-    limit: 100,
+function toIsoDayBucket(value: string | null | undefined): string | null {
+  if (typeof value !== 'string' || value.length < 10) {
+    return null
+  }
+
+  return value.slice(0, 10)
+}
+
+function isIsoWithinRange(
+  value: string | null,
+  options: {
+    from?: string
+    to?: string
+  }
+): boolean {
+  if (value === null) {
+    return false
+  }
+
+  if (options.from !== undefined && value < options.from) {
+    return false
+  }
+
+  if (options.to !== undefined && value > options.to) {
+    return false
+  }
+
+  return true
+}
+
+function isIsoDayWithinRange(
+  value: string | null,
+  options: {
+    from?: string
+    to?: string
+  }
+): boolean {
+  const day = toIsoDayBucket(value)
+  if (day === null) {
+    return false
+  }
+
+  const fromDay = toIsoDayBucket(options.from)
+  const toDay = toIsoDayBucket(options.to)
+
+  if (fromDay !== null && day < fromDay) {
+    return false
+  }
+
+  if (toDay !== null && day > toDay) {
+    return false
+  }
+
+  return true
+}
+
+export async function listHrRequests(
+  client: HulyClient,
+  options: {
+    employeeId?: string
+    departmentId?: string
+    typeId?: string
+    dateFrom?: string
+    dateTo?: string
+    dueDateFrom?: string
+    dueDateTo?: string
+    limit?: number
+  } = {}
+): Promise<HrRequestSummary[]> {
+  const query: Record<string, unknown> = {}
+
+  if (options.employeeId !== undefined) {
+    query.attachedTo = options.employeeId
+  }
+
+  if (options.departmentId !== undefined) {
+    query.department = options.departmentId
+  }
+
+  if (options.typeId !== undefined) {
+    query.type = options.typeId
+  }
+
+  const needsDateFiltering = (
+    options.dateFrom !== undefined ||
+    options.dateTo !== undefined ||
+    options.dueDateFrom !== undefined ||
+    options.dueDateTo !== undefined
+  )
+
+  const requests = await client.findAll(hr.class.Request as any, query as never, {
+    limit: needsDateFiltering ? 5000 : (options.limit ?? 100),
     sort: { createdOn: SortingOrder.Descending }
   })
 
-  return await Promise.all(requests.map(async (request) => await mapHrRequestSummary(client, request)))
+  let summaries = await Promise.all(requests.map(async (request) => await mapHrRequestSummary(client, request)))
+
+  if (options.dateFrom !== undefined || options.dateTo !== undefined) {
+    summaries = summaries.filter((request) => isIsoDayWithinRange(request.date, {
+      from: options.dateFrom,
+      to: options.dateTo
+    }))
+  }
+
+  if (options.dueDateFrom !== undefined || options.dueDateTo !== undefined) {
+    summaries = summaries.filter((request) => isIsoDayWithinRange(request.dueDate, {
+      from: options.dueDateFrom,
+      to: options.dueDateTo
+    }))
+  }
+
+  if (options.limit !== undefined) {
+    summaries = summaries.slice(0, options.limit)
+  }
+
+  return summaries
 }
 
 export async function getHrRequestSummary(client: HulyClient, id: string): Promise<HrRequestSummary> {
@@ -4881,13 +5947,41 @@ async function mapRecruitVacancySummary(client: HulyClient, vacancy: any): Promi
   }
 }
 
-export async function listRecruitVacancies(client: HulyClient): Promise<RecruitVacancySummary[]> {
-  const vacancies = await client.findAll(RECRUIT_VACANCY_CLASS as any, {}, {
-    limit: 100,
-    sort: { name: SortingOrder.Ascending }
+export async function listRecruitVacancies(
+  client: HulyClient,
+  options: {
+    name?: string
+    location?: string
+    private?: boolean
+    archived?: boolean
+    limit?: number
+  } = {}
+): Promise<RecruitVacancySummary[]> {
+  const query: Record<string, unknown> = {}
+
+  if (options.name !== undefined) {
+    query.name = options.name
+  }
+
+  if (options.location !== undefined) {
+    query.location = options.location
+  }
+
+  if (options.private !== undefined) {
+    query.private = options.private
+  }
+
+  if (options.archived !== undefined) {
+    query.archived = options.archived
+  }
+
+  const vacancies = await client.findAll(RECRUIT_VACANCY_CLASS as any, query as never, {
+    limit: options.limit ?? 100,
+    sort: { name: SortingOrder.Ascending },
+    showArchived: options.archived !== undefined
   })
 
-  return await Promise.all(vacancies.map(async (vacancy) => await mapRecruitVacancySummary(client, vacancy)))
+  return await Promise.all((vacancies as any[]).map(async (vacancy) => await mapRecruitVacancySummary(client, vacancy)))
 }
 
 export async function getRecruitVacancySummary(client: HulyClient, id: string): Promise<RecruitVacancySummary> {
@@ -4905,6 +5999,7 @@ export async function createRecruitVacancy(
     private?: boolean
   }
 ): Promise<RecruitVacancySummary> {
+  const account = await client.getAccount()
   const id = await client.createDoc(RECRUIT_VACANCY_CLASS as any, core.space.Space, {
     name: options.name,
     description: options.description ?? '',
@@ -4914,7 +6009,7 @@ export async function createRecruitVacancy(
     type: RECRUIT_VACANCY_TYPE,
     private: options.private ?? false,
     archived: false,
-    members: []
+    members: options.private ? [account.uuid] : []
   } as never)
 
   return await getRecruitVacancySummary(client, id)
@@ -4958,6 +6053,14 @@ export async function updateRecruitVacancy(
 
   if (updates.private !== undefined) {
     operations.private = updates.private
+
+    if (updates.private) {
+      const account = await client.getAccount()
+      const members = Array.isArray((vacancy as any).members) ? (vacancy as any).members.map((member: unknown) => String(member)) : []
+      operations.members = Array.from(new Set([...members, account.uuid]))
+    } else {
+      operations.members = []
+    }
   }
 
   if (updates.archived !== undefined) {
@@ -5026,6 +6129,30 @@ async function resolveRecruitApplicantStatus(client: HulyClient, value: string):
   return status.id
 }
 
+async function getRecruitApplicantMoveContext(client: HulyClient, id: string): Promise<{
+  applicant: any
+  vacancyId: string
+  siblings: any[]
+}> {
+  const applicant = await getRecruitApplicantById(client, id)
+  const vacancyId = normalizeUnknownRef(applicant.attachedTo)
+
+  if (!vacancyId) {
+    throw new CliError('VALIDATION_ERROR', `Applicant '${id}' is not attached to a vacancy`, 4)
+  }
+
+  const applicants = await client.findAll(RECRUIT_APPLICANT_CLASS as any, { attachedTo: vacancyId as never }, {
+    limit: 5000,
+    sort: { rank: SortingOrder.Ascending }
+  })
+
+  return {
+    applicant,
+    vacancyId,
+    siblings: applicants.filter((entry) => entry._id !== applicant._id)
+  }
+}
+
 async function mapRecruitApplicantSummary(client: HulyClient, applicant: any): Promise<RecruitApplicantSummary> {
   const [vacancy, assigneeNames, statuses] = await Promise.all([
     applicant.attachedTo ? client.findOne(RECRUIT_VACANCY_CLASS as any, { _id: applicant.attachedTo as never }) : Promise.resolve(undefined),
@@ -5043,6 +6170,8 @@ async function mapRecruitApplicantSummary(client: HulyClient, applicant: any): P
     vacancyName: vacancyEntry ? vacancyEntry.name : null,
     identifier: normalizeUnknownString(applicant.identifier),
     number: typeof applicant.number === 'number' ? applicant.number : null,
+    rank: normalizeUnknownString(applicant.rank),
+    statusId: normalizeUnknownRef(applicant.status),
     status: status?.name ?? normalizeUnknownRef(applicant.status),
     assigneeId: normalizeUnknownRef(applicant.assignee),
     assigneeName: applicant.assignee ? assigneeNames.get(applicant.assignee as string) ?? null : null,
@@ -5057,6 +6186,7 @@ export async function listRecruitApplicants(
   client: HulyClient,
   options: {
     vacancyId?: string
+    identifier?: string
     status?: string
     assigneeId?: string | null
     limit?: number
@@ -5066,6 +6196,10 @@ export async function listRecruitApplicants(
 
   if (options.vacancyId) {
     query.attachedTo = (await getRecruitVacancyById(client, options.vacancyId))._id
+  }
+
+  if (options.identifier !== undefined) {
+    query.identifier = options.identifier
   }
 
   if (options.status !== undefined) {
@@ -5081,7 +6215,9 @@ export async function listRecruitApplicants(
     query as never,
     {
       limit: options.limit ?? 100,
-      sort: { createdOn: SortingOrder.Descending }
+      sort: options.vacancyId !== undefined
+        ? { rank: SortingOrder.Ascending }
+        : { createdOn: SortingOrder.Descending }
     }
   )
 
@@ -5181,6 +6317,88 @@ export async function updateRecruitApplicant(
   return await getRecruitApplicantSummary(client, id)
 }
 
+export async function moveRecruitApplicant(
+  client: HulyClient,
+  id: string,
+  options: {
+    beforeId?: string
+    afterId?: string
+    top?: boolean
+    bottom?: boolean
+    status?: string
+  }
+): Promise<RecruitApplicantSummary> {
+  const { applicant, vacancyId, siblings } = await getRecruitApplicantMoveContext(client, id)
+
+  const getRank = (entry: any, label: string): string => {
+    const rank = normalizeUnknownString(entry?.rank)
+    if (!rank) {
+      throw new CliError('VALIDATION_ERROR', label + ' has no rank.', 4)
+    }
+    return rank
+  }
+
+  let nextRank: string
+  let nextStatus = options.status
+
+  if (options.beforeId !== undefined) {
+    if (options.beforeId === id) {
+      throw new CliError('VALIDATION_ERROR', 'Use a different applicant id for --before.', 4)
+    }
+
+    const target = await getRecruitApplicantById(client, options.beforeId)
+    if (normalizeUnknownRef(target.attachedTo) !== vacancyId) {
+      throw new CliError('VALIDATION_ERROR', 'The --before applicant must belong to the same vacancy.', 4)
+    }
+
+    const targetIndex = siblings.findIndex((entry) => entry._id === target._id)
+    const previous = targetIndex > 0 ? siblings[targetIndex - 1] : undefined
+
+    nextRank = makeRank(previous ? getRank(previous, 'The previous applicant') : undefined, getRank(target, 'The --before applicant'))
+
+    if (nextStatus === undefined) {
+      nextStatus = normalizeUnknownRef(target.status) ?? undefined
+    }
+  } else if (options.afterId !== undefined) {
+    if (options.afterId === id) {
+      throw new CliError('VALIDATION_ERROR', 'Use a different applicant id for --after.', 4)
+    }
+
+    const target = await getRecruitApplicantById(client, options.afterId)
+    if (normalizeUnknownRef(target.attachedTo) !== vacancyId) {
+      throw new CliError('VALIDATION_ERROR', 'The --after applicant must belong to the same vacancy.', 4)
+    }
+
+    const targetIndex = siblings.findIndex((entry) => entry._id === target._id)
+    const next = targetIndex >= 0 && targetIndex + 1 < siblings.length ? siblings[targetIndex + 1] : undefined
+
+    nextRank = makeRank(getRank(target, 'The --after applicant'), next ? getRank(next, 'The next applicant') : undefined)
+
+    if (nextStatus === undefined) {
+      nextStatus = normalizeUnknownRef(target.status) ?? undefined
+    }
+  } else if (options.top) {
+    nextRank = siblings.length === 0
+      ? makeRank(undefined, undefined)
+      : makeRank(undefined, getRank(siblings[0], 'The top applicant'))
+  } else if (options.bottom) {
+    nextRank = siblings.length === 0
+      ? makeRank(undefined, undefined)
+      : makeRank(getRank(siblings[siblings.length - 1], 'The bottom applicant'), undefined)
+  } else {
+    throw new CliError('VALIDATION_ERROR', 'Provide exactly one move target.', 4)
+  }
+
+  const operations: Record<string, unknown> = { rank: nextRank }
+
+  if (nextStatus !== undefined) {
+    operations.status = await resolveRecruitApplicantStatus(client, nextStatus)
+  }
+
+  await client.updateDoc(RECRUIT_APPLICANT_CLASS as any, core.space.Space, applicant._id, operations as never)
+  return await getRecruitApplicantSummary(client, id)
+}
+
 export async function deleteRecruitApplicant(client: HulyClient, id: string): Promise<{ deleted: true, id: string }> {
   const applicant = await getRecruitApplicantById(client, id)
   await client.removeDoc(RECRUIT_APPLICANT_CLASS as any, core.space.Space, applicant._id)
@@ -5215,9 +6433,46 @@ function mapRecruitCandidateSummary(candidate: any): RecruitCandidateSummary {
   }
 }
 
-export async function listRecruitCandidates(client: HulyClient): Promise<RecruitCandidateSummary[]> {
-  const candidates = await client.findAll(RECRUIT_CANDIDATE_MIXIN as any, {}, {
-    limit: 100,
+export async function listRecruitCandidates(
+  client: HulyClient,
+  options: {
+    name?: string
+    city?: string
+    title?: string
+    source?: string
+    remote?: boolean
+    onsite?: boolean
+    limit?: number
+  } = {}
+): Promise<RecruitCandidateSummary[]> {
+  const query: Record<string, unknown> = {}
+
+  if (options.name !== undefined) {
+    query.name = options.name
+  }
+
+  if (options.city !== undefined) {
+    query.city = options.city
+  }
+
+  if (options.title !== undefined) {
+    query.title = options.title
+  }
+
+  if (options.source !== undefined) {
+    query.source = options.source
+  }
+
+  if (options.remote !== undefined) {
+    query.remote = options.remote
+  }
+
+  if (options.onsite !== undefined) {
+    query.onsite = options.onsite
+  }
+
+  const candidates = await client.findAll(RECRUIT_CANDIDATE_MIXIN as any, query as never, {
+    limit: options.limit ?? 100,
     sort: { name: SortingOrder.Ascending }
   })
 
@@ -5261,9 +6516,9 @@ export async function updateRecruitCandidate(
   id: string,
   updates: {
     name?: string
-    city?: string
-    title?: string
-    source?: string
+    city?: string | null
+    title?: string | null
+    source?: string | null
     remote?: boolean
     onsite?: boolean
   }
@@ -5277,15 +6532,15 @@ export async function updateRecruitCandidate(
   }
 
   if (updates.city !== undefined) {
-    personOperations.city = updates.city
+    personOperations.city = updates.city ?? ''
   }
 
   if (updates.title !== undefined) {
-    mixinOperations.title = updates.title
+    mixinOperations.title = updates.title ?? ''
   }
 
   if (updates.source !== undefined) {
-    mixinOperations.source = updates.source
+    mixinOperations.source = updates.source ?? ''
   }
 
   if (updates.remote !== undefined) {
@@ -5362,6 +6617,8 @@ export async function listRecruitReviews(
   options: {
     candidateId?: string
     applicantId?: string
+    verdict?: string
+    location?: string
     limit?: number
   }
 ): Promise<RecruitReviewSummary[]> {
@@ -5373,6 +6630,14 @@ export async function listRecruitReviews(
 
   if (options.applicantId !== undefined) {
     query.application = (await getRecruitApplicantById(client, options.applicantId))._id
+  }
+
+  if (options.verdict !== undefined) {
+    query.verdict = options.verdict
+  }
+
+  if (options.location !== undefined) {
+    query.location = options.location
   }
 
   const reviews = await client.findAll(RECRUIT_REVIEW_CLASS as any, query as never, {
@@ -5450,7 +6715,7 @@ export async function updateRecruitReview(
   updates: {
     title?: string
     verdict?: string
-    description?: string
+    description?: string | null
     location?: string | null
     date?: string
     dueDate?: string
@@ -5556,6 +6821,7 @@ export async function listRecruitOpinions(
   client: HulyClient,
   options: {
     reviewId?: string
+    value?: string
     limit?: number
   }
 ): Promise<RecruitOpinionSummary[]> {
@@ -5563,6 +6829,10 @@ export async function listRecruitOpinions(
 
   if (options.reviewId !== undefined) {
     query.attachedTo = (await getRecruitReviewById(client, options.reviewId))._id
+  }
+
+  if (options.value !== undefined) {
+    query.value = options.value
   }
 
   const opinions = await client.findAll(RECRUIT_OPINION_CLASS as any, query as never, {
@@ -5618,7 +6888,7 @@ export async function updateRecruitOpinion(
   id: string,
   updates: {
     value?: string
-    description?: string
+    description?: string | null
   }
 ): Promise<RecruitOpinionSummary> {
   const opinion = await getRecruitOpinionById(client, id)

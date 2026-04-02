@@ -17,6 +17,10 @@ type NotificationListOptions = {
   unread?: boolean
   archived?: boolean
   active?: boolean
+  className?: string
+  objectClass?: string
+  objectId?: string
+  type?: string
 }
 
 function parseLimit(limit: string | undefined): number | undefined {
@@ -36,6 +40,10 @@ function parseListFilters(options: NotificationListOptions): {
   limit?: number
   isViewed?: boolean
   archived?: boolean
+  className?: string
+  objectClass?: string
+  objectId?: string
+  type?: string
 } {
   if (options.read && options.unread) {
     throw new CliError('VALIDATION_ERROR', 'Use only one of --read or --unread.', 4)
@@ -50,7 +58,11 @@ function parseListFilters(options: NotificationListOptions): {
     ...(options.read ? { isViewed: true } : {}),
     ...(options.unread ? { isViewed: false } : {}),
     ...(options.archived ? { archived: true } : {}),
-    ...(options.active ? { archived: false } : {})
+    ...(options.active ? { archived: false } : {}),
+    ...(options.className === undefined ? {} : { className: options.className }),
+    ...(options.objectClass === undefined ? {} : { objectClass: options.objectClass }),
+    ...(options.objectId === undefined ? {} : { objectId: options.objectId }),
+    ...(options.type === undefined ? {} : { type: options.type })
   }
 }
 
@@ -65,6 +77,10 @@ export function registerNotificationCommands(program: Command): void {
     .option('--unread', 'Only show unread notifications')
     .option('--archived', 'Only show archived notifications')
     .option('--active', 'Only show non-archived notifications')
+    .option('--class <id>', 'Filter by exact notification class id')
+    .option('--object-class <id>', 'Filter by exact object class id')
+    .option('--object-id <id>', 'Filter by exact object id')
+    .option('--type <id>', 'Filter by exact notification type id')
 
   handleCommand(list, async (options: NotificationListOptions) => {
     return await withClient(async (client) => await listNotifications(client, parseListFilters(options)))

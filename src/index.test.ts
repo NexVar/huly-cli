@@ -171,6 +171,128 @@ test('main returns JSON for board help', async () => {
   assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
 })
 
+test('main returns JSON for milestone help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'milestone', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'milestone')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'get'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'update'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
+})
+
+test('main returns JSON for teamspace help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'teamspace', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'teamspace')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'get'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'update'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
+})
+
+test('main returns JSON for person help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'person', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'person')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'get'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'update'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
+})
+
+test('main returns JSON for label help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'label', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'label')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'get'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'update'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'assign'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'unassign'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
+})
+
+test('main returns JSON for component help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'component', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'component')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'get'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'update'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
+})
+
 test('main returns JSON for board column help', async () => {
   const { stdout, stderr } = await captureStreams(async () => {
     await main(['node', 'huly', 'board', 'column', '--help'])
@@ -189,6 +311,7 @@ test('main returns JSON for board column help', async () => {
   assert.equal(payload.ok, true)
   assert.equal(payload.data.command, 'column')
   assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'get'))
 })
 
 test('main returns JSON for board card help', async () => {
@@ -328,7 +451,6 @@ test('main returns JSON for drive folder help', async () => {
   assert.equal(payload.data.command, 'folder')
   assert.ok(payload.data.commands.some((command) => command.name === 'list'))
   assert.ok(payload.data.commands.some((command) => command.name === 'create'))
-  assert.ok(payload.data.commands.some((command) => command.name === 'activity'))
   assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
 })
 
@@ -423,6 +545,31 @@ test('main returns JSON for recruit help', async () => {
   assert.ok(payload.data.commands.some((command) => command.name === 'candidate'))
   assert.ok(payload.data.commands.some((command) => command.name === 'review'))
   assert.ok(payload.data.commands.some((command) => command.name === 'opinion'))
+})
+
+test('main returns JSON for recruit applicant help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'recruit', 'applicant', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'applicant')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'get'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'update'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'move'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
 })
 
 test('main returns JSON for recruit review help', async () => {
@@ -625,6 +772,133 @@ test('main returns JSON for time report help', async () => {
   assert.ok(payload.data.commands.some((command) => command.name === 'create'))
   assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
 })
+
+test('main returns JSON for time list help with richer todo filters', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'time', 'list', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      options: Array<{ flags: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'list')
+  assert.ok(payload.data.options.some((option) => option.flags === '--title <text>'))
+  assert.ok(payload.data.options.some((option) => option.flags === '--priority <priority>'))
+  assert.ok(payload.data.options.some((option) => option.flags === '--due-date-from <date>'))
+  assert.ok(payload.data.options.some((option) => option.flags === '--due-date-to <date>'))
+})
+
+test('main returns JSON for time report list help with description and value filters', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'time', 'report', 'list', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      options: Array<{ flags: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'list')
+  assert.ok(payload.data.options.some((option) => option.flags === '--description <text>'))
+  assert.ok(payload.data.options.some((option) => option.flags === '--date-from <date>'))
+  assert.ok(payload.data.options.some((option) => option.flags === '--date-to <date>'))
+  assert.ok(payload.data.options.some((option) => option.flags === '--value-from <hours>'))
+  assert.ok(payload.data.options.some((option) => option.flags === '--value-to <hours>'))
+})
+
+test('main returns JSON for time report totals help with description and value filters', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'time', 'report', 'totals', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      options: Array<{ flags: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'totals')
+  assert.ok(payload.data.options.some((option) => option.flags === '--description <text>'))
+  assert.ok(payload.data.options.some((option) => option.flags === '--date-from <date>'))
+  assert.ok(payload.data.options.some((option) => option.flags === '--date-to <date>'))
+  assert.ok(payload.data.options.some((option) => option.flags === '--value-from <hours>'))
+  assert.ok(payload.data.options.some((option) => option.flags === '--value-to <hours>'))
+})
+
+test('main rejects conflicting time todo description update flags', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main(['node', 'huly', 'time', 'update', 'todo-id', '--description', 'alpha', '--clear-description'])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.equal(payload.error.message, 'Use only one of --description/--description-file or --clear-description.')
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
+})
+
+
+test('main rejects conflicting time report description update flags', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main(['node', 'huly', 'time', 'report', 'update', 'report-id', '--description', 'alpha', '--clear-description'])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.match(payload.error.message, /Use only one of --description or --clear-description\./)
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
+})
+
 
 test('main returns JSON for --version', async () => {
   const { stdout, stderr } = await captureStreams(async () => {

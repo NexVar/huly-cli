@@ -22,8 +22,12 @@ import { CliError } from '../lib/output'
 type TimeListOptions = {
   issue?: string
   assignee?: string
+  title?: string
+  priority?: string
   done?: boolean
   open?: boolean
+  dueDateFrom?: string
+  dueDateTo?: string
   limit?: string
 }
 
@@ -40,8 +44,11 @@ type TimeCreateOptions = {
 type TimeReportListOptions = {
   issue?: string
   assignee?: string
+  description?: string
   dateFrom?: string
   dateTo?: string
+  valueFrom?: string
+  valueTo?: string
   limit?: string
 }
 
@@ -56,14 +63,18 @@ type TimeReportCreateOptions = {
 type TimeReportTotalsOptions = {
   issue?: string
   assignee?: string
+  description?: string
   dateFrom?: string
   dateTo?: string
+  valueFrom?: string
+  valueTo?: string
 }
 
 type TimeUpdateOptions = {
   title?: string
   description?: string
   descriptionFile?: string
+  clearDescription?: boolean
   priority?: string
   assignee?: string
   dueDate?: string
@@ -72,6 +83,7 @@ type TimeUpdateOptions = {
 type TimeReportUpdateOptions = {
   value?: string
   description?: string
+  clearDescription?: boolean
   assignee?: string
   date?: string
 }
@@ -139,15 +151,23 @@ export function registerTimeCommands(program: Command): void {
     .description('List issue todos')
     .option('--issue <identifier>', 'Filter by issue identifier')
     .option('--assignee <email>', 'Filter by assignee email')
+    .option('--title <text>', 'Filter by exact todo title')
+    .option('--priority <priority>', 'Filter by todo priority')
     .option('--done', 'Only show completed todos')
     .option('--open', 'Only show open todos')
+    .option('--due-date-from <date>', 'Only include todos due on or after this ISO-8601 date')
+    .option('--due-date-to <date>', 'Only include todos due on or before this ISO-8601 date')
     .option('--limit <n>', 'Maximum number of todos')
 
   handleCommand(list, async (options: TimeListOptions) => {
     return await withClient(async (client) => await listTimeTodos(client, {
       issueIdentifier: options.issue,
       assignee: options.assignee,
+      title: options.title,
+      priority: options.priority,
       isDone: parseDoneFilter(options),
+      dueDateFrom: parseIsoDate(options.dueDateFrom, '--due-date-from'),
+      dueDateTo: parseIsoDate(options.dueDateTo, '--due-date-to'),
       limit: parseLimit(options.limit)
     }))
   })
@@ -179,7 +199,7 @@ export function registerTimeCommands(program: Command): void {
       description,
       priority: options.priority,
       assignee: options.assignee,
-      dueDate: options.dueDate
+      dueDate: parseIsoDate(options.dueDate, '--due-date')
     }))
   })
 
@@ -190,19 +210,26 @@ export function registerTimeCommands(program: Command): void {
     .option('--title <title>', 'Todo title')
     .option('--description <markdown>', 'Todo description')
     .option('--description-file <path>', 'Read todo description from a file')
+    .option('--clear-description', 'Remove the todo description')
     .option('--priority <priority>', 'Todo priority')
     .option('--assignee <email>', 'Assignee email')
     .option('--due-date <date>', 'Due date in ISO-8601 format')
 
   handleCommand(update, async (id: string, options: TimeUpdateOptions) => {
-    const description = await readTextOption(options.description, options.descriptionFile, 'description')
+    if (options.clearDescription && (options.description !== undefined || options.descriptionFile !== undefined)) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --description/--description-file or --clear-description.', 4)
+    }
+
+    const description = options.clearDescription
+      ? ''
+      : await readTextOption(options.description, options.descriptionFile, 'description')
 
     return await withClient(async (client) => await updateTimeTodo(client, id, {
       title: options.title,
       description,
       priority: options.priority,
       assignee: options.assignee,
-      dueDate: options.dueDate
+      dueDate: parseIsoDate(options.dueDate, '--due-date')
     }))
   })
 
@@ -234,16 +261,22 @@ export function registerTimeCommands(program: Command): void {
     .description('List issue time reports')
     .option('--issue <identifier>', 'Filter by issue identifier')
     .option('--assignee <email>', 'Filter by assignee email')
+    .option('--description <text>', 'Filter by exact report description')
     .option('--date-from <date>', 'Only include reports on or after this ISO-8601 date')
     .option('--date-to <date>', 'Only include reports on or before this ISO-8601 date')
+    .option('--value-from <hours>', 'Only include reports with value at or above this number of hours')
+    .option('--value-to <hours>', 'Only include reports with value at or below this number of hours')
     .option('--limit <n>', 'Maximum number of time reports')
 
   handleCommand(reportList, async (options: TimeReportListOptions) => {
     return await withClient(async (client) => await listTimeReports(client, {
       issueIdentifier: options.issue,
       assignee: options.assignee,
+      description: options.description,
       dateFrom: parseIsoDate(options.dateFrom, '--date-from'),
       dateTo: parseIsoDate(options.dateTo, '--date-to'),
+      valueFrom: parseHours(options.valueFrom, '--value-from'),
+      valueTo: parseHours(options.valueTo, '--value-to'),
       limit: parseLimit(options.limit)
     }))
   })
@@ -260,15 +293,21 @@ export function registerTimeCommands(program: Command): void {
     .description('Aggregate issue time reports')
     .option('--issue <identifier>', 'Filter by issue identifier')
     .option('--assignee <email>', 'Filter by assignee email')
+    .option('--description <text>', 'Filter by exact report description')
     .option('--date-from <date>', 'Only include reports on or after this ISO-8601 date')
     .option('--date-to <date>', 'Only include reports on or before this ISO-8601 date')
+    .option('--value-from <hours>', 'Only include reports with value at or above this number of hours')
+    .option('--value-to <hours>', 'Only include reports with value at or below this number of hours')
 
   handleCommand(reportTotals, async (options: TimeReportTotalsOptions) => {
     return await withClient(async (client) => await getTimeReportTotals(client, {
       issueIdentifier: options.issue,
       assignee: options.assignee,
+      description: options.description,
       dateFrom: parseIsoDate(options.dateFrom, '--date-from'),
-      dateTo: parseIsoDate(options.dateTo, '--date-to')
+      dateTo: parseIsoDate(options.dateTo, '--date-to'),
+      valueFrom: parseHours(options.valueFrom, '--value-from'),
+      valueTo: parseHours(options.valueTo, '--value-to')
     }))
   })
 
@@ -297,13 +336,18 @@ export function registerTimeCommands(program: Command): void {
     .argument('<id>', 'Time report id')
     .option('--value <hours>', 'Reported time in hours')
     .option('--description <text>', 'Time report description')
+    .option('--clear-description', 'Remove the time report description')
     .option('--assignee <email>', 'Assignee email')
     .option('--date <date>', 'Report date in ISO-8601 format')
 
   handleCommand(reportUpdate, async (id: string, options: TimeReportUpdateOptions) => {
+    if (options.clearDescription && options.description !== undefined) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --description or --clear-description.', 4)
+    }
+
     return await withClient(async (client) => await updateTimeReport(client, id, {
       value: parseHours(options.value, '--value'),
-      description: options.description,
+      description: options.clearDescription ? '' : options.description,
       assignee: options.assignee,
       date: parseIsoDate(options.date, '--date')
     }))

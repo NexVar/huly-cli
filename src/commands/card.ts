@@ -23,9 +23,12 @@ import {
 import { CliError } from '../lib/output'
 
 type CardListOptions = {
+  title?: string
   type?: string
   parent?: string
   root?: boolean
+  readonly?: boolean
+  editable?: boolean
   limit?: string
 }
 
@@ -67,7 +70,9 @@ type CardTypeUpdateOptions = {
   label?: string
   extends?: string
   color?: string
+  clearColor?: boolean
   background?: string
+  clearBackground?: boolean
   removed?: boolean
   notRemoved?: boolean
 }
@@ -128,6 +133,22 @@ function parseRemovedOption(options: Pick<CardTypeUpdateOptions, 'removed' | 'no
 }
 
 function parseReadonlyOption(options: Pick<CardUpdateOptions, 'readonly' | 'editable'>): boolean | undefined {
+  if (options.readonly && options.editable) {
+    throw new CliError('VALIDATION_ERROR', 'Use only one of --readonly or --editable.', 4)
+  }
+
+  if (options.readonly) {
+    return true
+  }
+
+  if (options.editable) {
+    return false
+  }
+
+  return undefined
+}
+
+function parseReadonlyFilter(options: Pick<CardListOptions, 'readonly' | 'editable'>): boolean | undefined {
   if (options.readonly && options.editable) {
     throw new CliError('VALIDATION_ERROR', 'Use only one of --readonly or --editable.', 4)
   }
@@ -236,16 +257,26 @@ export function registerCardCommands(program: Command): void {
     .option('--label <label>', 'Card type label')
     .option('--extends <type>', 'Base card type id or label')
     .option('--color <number>', 'Card type color index')
+    .option('--clear-color', 'Clear the card type color')
     .option('--background <number>', 'Card type background index')
+    .option('--clear-background', 'Clear the card type background')
     .option('--removed', 'Mark the card type as removed')
     .option('--not-removed', 'Mark the card type as not removed')
 
   handleCommand(typeUpdate, async (id: string, options: CardTypeUpdateOptions) => {
+    if (options.color !== undefined && options.clearColor) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --color or --clear-color.', 4)
+    }
+
+    if (options.background !== undefined && options.clearBackground) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --background or --clear-background.', 4)
+    }
+
     return await withClient(async (client) => await updateCardType(client, id, {
       label: options.label,
       extends: options.extends,
-      color: parseIntegerOption(options.color, '--color'),
-      background: parseIntegerOption(options.background, '--background'),
+      color: options.clearColor ? null : parseIntegerOption(options.color, '--color'),
+      background: options.clearBackground ? null : parseIntegerOption(options.background, '--background'),
       removed: parseRemovedOption(options)
     }))
   })
@@ -312,15 +343,20 @@ export function registerCardCommands(program: Command): void {
   const list = card
     .command('list')
     .description('List cards in the default card space')
+    .option('--title <text>', 'Filter by exact card title')
     .option('--type <type>', 'Filter by card type id or label')
     .option('--parent <id>', 'Filter by parent card id')
     .option('--root', 'Filter to root cards without a parent')
+    .option('--readonly', 'Filter to readonly cards')
+    .option('--editable', 'Filter to editable cards')
     .option('--limit <n>', 'Maximum number of cards')
 
   handleCommand(list, async (options: CardListOptions) => {
     return await withClient(async (client) => await listCards(client, {
+      title: options.title,
       type: options.type,
       parentId: resolveCardParentFilter(options),
+      readonly: parseReadonlyFilter(options),
       limit: parseLimit(options.limit)
     }))
   })

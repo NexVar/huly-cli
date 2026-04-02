@@ -24,6 +24,7 @@ import {
   listRecruitOpinions,
   listRecruitReviews,
   listRecruitVacancies,
+  moveRecruitApplicant,
   updateRecruitApplicant,
   updateRecruitCandidate,
   updateRecruitOpinion,
@@ -59,8 +60,19 @@ type RecruitVacancyUpdateOptions = {
   unarchive?: boolean
 }
 
+type RecruitVacancyListOptions = {
+  name?: string
+  location?: string
+  private?: boolean
+  public?: boolean
+  archived?: boolean
+  active?: boolean
+  limit?: string
+}
+
 type RecruitApplicantListOptions = {
   vacancy?: string
+  identifier?: string
   status?: string
   assignee?: string
   withoutAssignee?: boolean
@@ -84,6 +96,14 @@ type RecruitApplicantUpdateOptions = {
   dueDate?: string | false
 }
 
+type RecruitApplicantMoveOptions = {
+  before?: string
+  after?: string
+  top?: boolean
+  bottom?: boolean
+  status?: string
+}
+
 type RecruitCandidateCreateOptions = {
   name: string
   city?: string
@@ -93,11 +113,24 @@ type RecruitCandidateCreateOptions = {
   onsite?: boolean
 }
 
-type RecruitCandidateUpdateOptions = {
+type RecruitCandidateListOptions = {
   name?: string
   city?: string
   title?: string
   source?: string
+  remote?: boolean
+  onsite?: boolean
+  limit?: string
+}
+
+type RecruitCandidateUpdateOptions = {
+  name?: string
+  city?: string
+  clearCity?: boolean
+  title?: string
+  clearTitle?: boolean
+  source?: string
+  clearSource?: boolean
   remote?: boolean
   onsite?: boolean
 }
@@ -105,6 +138,8 @@ type RecruitCandidateUpdateOptions = {
 type RecruitReviewListOptions = {
   candidate?: string
   applicant?: string
+  verdict?: string
+  location?: string
   limit?: string
 }
 
@@ -125,6 +160,7 @@ type RecruitReviewUpdateOptions = {
   verdict?: string
   description?: string
   descriptionFile?: string
+  clearDescription?: boolean
   location?: string | false
   date?: string
   dueDate?: string
@@ -133,6 +169,7 @@ type RecruitReviewUpdateOptions = {
 
 type RecruitOpinionListOptions = {
   review?: string
+  value?: string
   limit?: string
 }
 
@@ -147,6 +184,7 @@ type RecruitOpinionUpdateOptions = {
   value?: string
   description?: string
   descriptionFile?: string
+  clearDescription?: boolean
 }
 
 function resolvePrivate(options: Pick<RecruitVacancyUpdateOptions, 'private' | 'public'>): boolean | undefined {
@@ -175,6 +213,22 @@ function resolveArchived(options: Pick<RecruitVacancyUpdateOptions, 'archive' | 
   }
 
   if (options.unarchive) {
+    return false
+  }
+
+  return undefined
+}
+
+function resolveArchivedFilter(options: { archived?: boolean, active?: boolean }): boolean | undefined {
+  if (options.archived && options.active) {
+    throw new CliError('VALIDATION_ERROR', 'Use only one of --archived or --active.', 4)
+  }
+
+  if (options.archived) {
+    return true
+  }
+
+  if (options.active) {
     return false
   }
 
@@ -210,6 +264,23 @@ function resolveApplicantAssigneeFilter(options: RecruitApplicantListOptions): s
   return resolveNullableStringOption(options.assignee, options.withoutAssignee, 'assignee', 'without-assignee')
 }
 
+function resolveRecruitApplicantMove(options: RecruitApplicantMoveOptions): { beforeId?: string, afterId?: string, top?: boolean, bottom?: boolean } {
+  const selected = [options.before !== undefined, options.after !== undefined, options.top === true, options.bottom === true]
+    .filter(Boolean)
+    .length
+
+  if (selected !== 1) {
+    throw new CliError('VALIDATION_ERROR', 'Provide exactly one of --before, --after, --top, or --bottom.', 4)
+  }
+
+  return {
+    beforeId: options.before,
+    afterId: options.after,
+    top: options.top ? true : undefined,
+    bottom: options.bottom ? true : undefined
+  }
+}
+
 export function registerRecruitCommands(program: Command): void {
   const recruit = program.command('recruit').description('Recruiting commands')
 
@@ -218,8 +289,23 @@ export function registerRecruitCommands(program: Command): void {
   const vacancyList = vacancy
     .command('list')
     .description('List vacancies')
+    .option('--name <text>', 'Filter by exact vacancy name')
+    .option('--location <text>', 'Filter by exact vacancy location')
+    .option('--private', 'Filter to private vacancies')
+    .option('--public', 'Filter to public vacancies')
+    .option('--archived', 'Filter to archived vacancies')
+    .option('--active', 'Filter to active vacancies')
+    .option('--limit <n>', 'Maximum number of vacancies')
 
-  handleCommand(vacancyList, async () => await withClient(async (client) => await listRecruitVacancies(client)))
+  handleCommand(vacancyList, async (options: RecruitVacancyListOptions) => {
+    return await withClient(async (client) => await listRecruitVacancies(client, {
+      name: options.name,
+      location: options.location,
+      private: resolvePrivate(options),
+      archived: resolveArchivedFilter(options),
+      limit: parseLimit(options.limit)
+    }))
+  })
 
   const vacancyGet = vacancy
     .command('get')
@@ -310,6 +396,7 @@ export function registerRecruitCommands(program: Command): void {
     .command('list')
     .description('List applicants')
     .option('--vacancy <id>', 'Filter by vacancy id')
+    .option('--identifier <text>', 'Filter by exact applicant identifier')
     .option('--status <status>', 'Filter by applicant status name or id')
     .option('--assignee <id>', 'Filter by assignee person id')
     .option('--without-assignee', 'Filter to applicants without an assignee')
@@ -318,6 +405,7 @@ export function registerRecruitCommands(program: Command): void {
   handleCommand(applicantList, async (options: RecruitApplicantListOptions) => {
     return await withClient(async (client) => await listRecruitApplicants(client, {
       vacancyId: options.vacancy,
+      identifier: options.identifier,
       status: options.status,
       assigneeId: resolveApplicantAssigneeFilter(options),
       limit: parseLimit(options.limit)
@@ -390,13 +478,47 @@ export function registerRecruitCommands(program: Command): void {
 
   handleCommand(applicantDelete, async (id: string) => await withClient(async (client) => await deleteRecruitApplicant(client, id)))
 
+  const applicantMove = applicant
+    .command('move')
+    .description('Move an applicant within vacancy order')
+    .argument('<id>', 'Applicant id')
+    .option('--before <id>', 'Move before another applicant id')
+    .option('--after <id>', 'Move after another applicant id')
+    .option('--top', 'Move to the top of the vacancy order')
+    .option('--bottom', 'Move to the bottom of the vacancy order')
+    .option('--status <status>', 'Set the applicant status while moving')
+
+  handleCommand(applicantMove, async (id: string, options: RecruitApplicantMoveOptions) => {
+    return await withClient(async (client) => await moveRecruitApplicant(client, id, {
+      ...resolveRecruitApplicantMove(options),
+      status: options.status
+    }))
+  })
+
   const candidate = recruit.command('candidate').description('Candidate commands')
 
   const candidateList = candidate
     .command('list')
     .description('List candidates')
+    .option('--name <text>', 'Filter by exact candidate name')
+    .option('--city <text>', 'Filter by exact candidate city')
+    .option('--title <text>', 'Filter by exact candidate title')
+    .option('--source <text>', 'Filter by exact candidate source')
+    .option('--remote', 'Filter to remote candidates')
+    .option('--onsite', 'Filter to onsite candidates')
+    .option('--limit <n>', 'Maximum number of candidates')
 
-  handleCommand(candidateList, async () => await withClient(async (client) => await listRecruitCandidates(client)))
+  handleCommand(candidateList, async (options: RecruitCandidateListOptions) => {
+    return await withClient(async (client) => await listRecruitCandidates(client, {
+      name: options.name,
+      city: options.city,
+      title: options.title,
+      source: options.source,
+      remote: options.remote ? true : undefined,
+      onsite: options.onsite ? true : undefined,
+      limit: parseLimit(options.limit)
+    }))
+  })
 
   const candidateGet = candidate
     .command('get')
@@ -425,13 +547,35 @@ export function registerRecruitCommands(program: Command): void {
     .argument('<id>', 'Candidate id')
     .option('--name <name>', 'Candidate name')
     .option('--city <city>', 'Candidate city')
+    .option('--clear-city', 'Clear the candidate city')
     .option('--title <title>', 'Candidate title')
+    .option('--clear-title', 'Clear the candidate title')
     .option('--source <text>', 'Candidate source')
+    .option('--clear-source', 'Clear the candidate source')
     .option('--remote', 'Mark the candidate as remote')
+    .option('--no-remote', 'Mark the candidate as not remote')
     .option('--onsite', 'Mark the candidate as onsite')
+    .option('--no-onsite', 'Mark the candidate as not onsite')
 
   handleCommand(candidateUpdate, async (id: string, options: RecruitCandidateUpdateOptions) => {
-    return await withClient(async (client) => await updateRecruitCandidate(client, id, options))
+    if (options.city !== undefined && options.clearCity) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --city or --clear-city.', 4)
+    }
+
+    if (options.title !== undefined && options.clearTitle) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --title or --clear-title.', 4)
+    }
+
+    if (options.source !== undefined && options.clearSource) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --source or --clear-source.', 4)
+    }
+
+    return await withClient(async (client) => await updateRecruitCandidate(client, id, {
+      ...options,
+      city: options.clearCity ? null : options.city,
+      title: options.clearTitle ? null : options.title,
+      source: options.clearSource ? null : options.source
+    }))
   })
 
   const candidateDelete = candidate
@@ -448,12 +592,16 @@ export function registerRecruitCommands(program: Command): void {
     .description('List reviews')
     .option('--candidate <id>', 'Filter by candidate id')
     .option('--applicant <id>', 'Filter by applicant id')
+    .option('--verdict <value>', 'Filter by exact review verdict')
+    .option('--location <text>', 'Filter by exact review location')
     .option('--limit <n>', 'Maximum number of reviews')
 
   handleCommand(reviewList, async (options: RecruitReviewListOptions) => {
     return await withClient(async (client) => await listRecruitReviews(client, {
       candidateId: options.candidate,
       applicantId: options.applicant,
+      verdict: options.verdict,
+      location: options.location,
       limit: parseLimit(options.limit)
     }))
   })
@@ -501,6 +649,7 @@ export function registerRecruitCommands(program: Command): void {
     .option('--verdict <value>', 'Review verdict')
     .option('--description <markdown>', 'Review description markdown')
     .option('--description-file <path>', 'Read review description markdown from a file')
+    .option('--clear-description', 'Remove the review description')
     .option('--location <text>', 'Review location')
     .option('--no-location', 'Remove the review location')
     .option('--date <date>', 'Review start date in ISO-8601 format')
@@ -509,7 +658,13 @@ export function registerRecruitCommands(program: Command): void {
     .option('--no-applicant', 'Remove the applicant attachment')
 
   handleCommand(reviewUpdate, async (id: string, options: RecruitReviewUpdateOptions) => {
-    const description = await readTextOption(options.description, options.descriptionFile, 'description')
+    if (options.clearDescription && (options.description !== undefined || options.descriptionFile !== undefined)) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --description/--description-file or --clear-description.', 4)
+    }
+
+    const description = options.clearDescription
+      ? ''
+      : await readTextOption(options.description, options.descriptionFile, 'description')
 
     return await withClient(async (client) => await updateRecruitReview(client, id, {
       title: options.title,
@@ -535,11 +690,13 @@ export function registerRecruitCommands(program: Command): void {
     .command('list')
     .description('List opinions')
     .option('--review <id>', 'Filter by review id')
+    .option('--value <value>', 'Filter by exact opinion value')
     .option('--limit <n>', 'Maximum number of opinions')
 
   handleCommand(opinionList, async (options: RecruitOpinionListOptions) => {
     return await withClient(async (client) => await listRecruitOpinions(client, {
       reviewId: options.review,
+      value: options.value,
       limit: parseLimit(options.limit)
     }))
   })
@@ -576,9 +733,16 @@ export function registerRecruitCommands(program: Command): void {
     .option('--value <value>', 'Opinion value')
     .option('--description <markdown>', 'Opinion description markdown')
     .option('--description-file <path>', 'Read opinion description markdown from a file')
+    .option('--clear-description', 'Remove the opinion description')
 
   handleCommand(opinionUpdate, async (id: string, options: RecruitOpinionUpdateOptions) => {
-    const description = await readTextOption(options.description, options.descriptionFile, 'description')
+    if (options.clearDescription && (options.description !== undefined || options.descriptionFile !== undefined)) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --description/--description-file or --clear-description.', 4)
+    }
+
+    const description = options.clearDescription
+      ? ''
+      : await readTextOption(options.description, options.descriptionFile, 'description')
 
     return await withClient(async (client) => await updateRecruitOpinion(client, id, {
       value: options.value,

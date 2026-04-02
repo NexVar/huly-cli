@@ -2,6 +2,7 @@ import { Command } from 'commander'
 import { handleCommand } from '../lib/command'
 import { withClient } from '../lib/client'
 import { readTextOption } from '../lib/files'
+import { resolveNullableStringOption } from '../lib/options'
 import {
   addChatMembers,
   createDirectChat,
@@ -27,6 +28,14 @@ import {
 import { CliError } from '../lib/output'
 
 type ChatListOptions = {
+  name?: string
+  member?: string
+  private?: boolean
+  public?: boolean
+  archived?: boolean
+  active?: boolean
+  channel?: boolean
+  direct?: boolean
   limit?: string
   includeDirect?: boolean
 }
@@ -42,7 +51,9 @@ type ChatCreateOptions = {
 type ChatUpdateOptions = {
   name?: string
   topic?: string
+  clearTopic?: boolean
   description?: string
+  clearDescription?: boolean
   private?: boolean
   public?: boolean
   archive?: boolean
@@ -137,17 +148,66 @@ function resolveArchivedState(options: Pick<ChatUpdateOptions, 'archive' | 'unar
   return undefined
 }
 
+function resolveArchivedFilter(options: Pick<ChatListOptions, 'archived' | 'active'>): boolean | undefined {
+  if (options.archived && options.active) {
+    throw new CliError('VALIDATION_ERROR', 'Use only one of --archived or --active.', 4)
+  }
+
+  if (options.archived) {
+    return true
+  }
+
+  if (options.active) {
+    return false
+  }
+
+  return undefined
+}
+
+function resolveChatKindFilter(options: Pick<ChatListOptions, 'includeDirect' | 'channel' | 'direct'>): 'channel' | 'direct' | 'all' {
+  if (options.channel && options.direct) {
+    throw new CliError('VALIDATION_ERROR', 'Use only one of --channel or --direct.', 4)
+  }
+
+  if (options.includeDirect && (options.channel || options.direct)) {
+    throw new CliError('VALIDATION_ERROR', 'Use --include-direct by itself, or choose exactly one of --channel or --direct.', 4)
+  }
+
+  if (options.direct) {
+    return 'direct'
+  }
+
+  if (options.includeDirect) {
+    return 'all'
+  }
+
+  return 'channel'
+}
+
 export function registerChatCommands(program: Command): void {
   const chat = program.command('chat').description('Chat channel and message commands')
 
   const list = chat
     .command('list')
     .description('List chat channels')
-    .option('--include-direct', 'Include direct-message chats')
+    .option('--name <text>', 'Filter by exact chat name')
+    .option('--private', 'Filter to private chats')
+    .option('--public', 'Filter to public chats')
+    .option('--member <email>', 'Filter to chats containing a member email')
+    .option('--archived', 'Filter to archived chats')
+    .option('--active', 'Filter to non-archived chats')
+    .option('--channel', 'Filter to channel chats')
+    .option('--direct', 'Filter to direct-message chats')
+    .option('--include-direct', 'Include direct-message chats alongside channels')
     .option('--limit <n>', 'Maximum number of chats')
 
   handleCommand(list, async (options: ChatListOptions) => {
     return await withClient(async (client) => await listChatSpaces(client, {
+      name: options.name,
+      memberEmail: options.member,
+      private: resolveVisibility(options),
+      archived: resolveArchivedFilter(options),
+      kind: resolveChatKindFilter(options),
       includeDirect: options.includeDirect,
       limit: parseLimit(options.limit)
     }))
@@ -185,7 +245,9 @@ export function registerChatCommands(program: Command): void {
     .argument('<id>', 'Chat channel id')
     .option('--name <name>', 'Channel name')
     .option('--topic <text>', 'Channel topic')
+    .option('--clear-topic', 'Clear the channel topic')
     .option('--description <text>', 'Channel description')
+    .option('--clear-description', 'Clear the channel description')
     .option('--private', 'Set the channel to private')
     .option('--public', 'Set the channel to public')
     .option('--archive', 'Archive the channel')
@@ -194,8 +256,8 @@ export function registerChatCommands(program: Command): void {
   handleCommand(update, async (id: string, options: ChatUpdateOptions) => {
     return await withClient(async (client) => await updateChatChannel(client, id, {
       name: options.name,
-      topic: options.topic,
-      description: options.description,
+      topic: resolveNullableStringOption(options.topic, options.clearTopic, 'topic', 'clear-topic'),
+      description: resolveNullableStringOption(options.description, options.clearDescription, 'description', 'clear-description'),
       private: resolveVisibility(options),
       archived: resolveArchivedState(options)
     }))

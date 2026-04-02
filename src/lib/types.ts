@@ -239,12 +239,20 @@ export type TimeReportTotalsSummary = {
   filters: {
     issue: string | null
     assignee: string | null
+    description: string | null
+    valueFrom: number | null
+    valueTo: number | null
     dateFrom: string | null
     dateTo: string | null
   }
   byIssue: Array<{
     issue: string | null
     issueId: string | null
+    reportCount: number
+    totalValue: number
+  }>
+  byDate: Array<{
+    date: string | null
     reportCount: number
     totalValue: number
   }>
@@ -351,6 +359,8 @@ export type BoardSummary = {
   id: string
   name: string
   description: string | null
+  color: number | null
+  background: string | null
   private: boolean
   archived: boolean
   type: string | null
@@ -364,6 +374,10 @@ export type BoardCardSummary = {
   boardName: string | null
   title: string
   description: string | null
+  coverColor: number | null
+  coverSize: 'small' | 'large' | null
+  memberIds: string[]
+  memberNames: string[]
   status: string | null
   statusName: string | null
   statusCategoryId: string | null
@@ -388,6 +402,10 @@ export type BoardColumnSummary = {
   statusCategoryId: string | null
   statusCategory: string | null
   cardCount: number
+}
+
+export type BoardColumnDetailSummary = BoardColumnSummary & {
+  cards: BoardCardSummary[]
 }
 
 export type DriveSummary = {
@@ -504,6 +522,8 @@ export type RecruitApplicantSummary = {
   vacancyName: string | null
   identifier: string | null
   number: number | null
+  rank: string | null
+  statusId: string | null
   status: string | null
   assigneeId: string | null
   assigneeName: string | null

@@ -1,7 +1,7 @@
 import { Command } from 'commander'
 import { handleCommand } from '../lib/command'
 import { withClient } from '../lib/client'
-import { createDrive, createDriveFile, createDriveFolder, deleteDrive, deleteDriveFile, deleteDriveFolder, getDriveFileSummary, getDriveFolderSummary, getDriveSummary, listDriveFileActivity, listDriveFiles, listDriveFolderActivity, listDriveFolders, listDrives, updateDrive, updateDriveFile, updateDriveFolder } from '../lib/huly'
+import { createDrive, createDriveFile, createDriveFolder, deleteDrive, deleteDriveFile, deleteDriveFolder, getDriveFileSummary, getDriveFolderSummary, getDriveSummary, listDriveFileActivity, listDriveFiles, listDriveFolders, listDrives, updateDrive, updateDriveFile, updateDriveFolder } from '../lib/huly'
 import { CliError } from '../lib/output'
 
 type DriveCreateOptions = {
@@ -10,9 +10,19 @@ type DriveCreateOptions = {
   private?: boolean
 }
 
+type DriveListOptions = {
+  name?: string
+  private?: boolean
+  public?: boolean
+  archived?: boolean
+  active?: boolean
+  limit?: string
+}
+
 type DriveUpdateOptions = {
   name?: string
   description?: string
+  clearDescription?: boolean
   private?: boolean
   public?: boolean
   archive?: boolean
@@ -24,9 +34,16 @@ type DriveResourceCreateOptions = {
   name?: string
 }
 
+type DriveResourceListOptions = {
+  title?: string
+  name?: string
+  limit?: string
+}
+
 type DriveResourceUpdateOptions = {
   title?: string
   name?: string
+  clearName?: boolean
 }
 
 type DriveActivityListOptions = {
@@ -65,6 +82,22 @@ function resolveArchived(options: Pick<DriveUpdateOptions, 'archive' | 'unarchiv
   return undefined
 }
 
+function resolveArchivedFilter(options: Pick<DriveListOptions, 'archived' | 'active'>): boolean | undefined {
+  if (options.archived && options.active) {
+    throw new CliError('VALIDATION_ERROR', 'Use only one of --archived or --active.', 4)
+  }
+
+  if (options.archived) {
+    return true
+  }
+
+  if (options.active) {
+    return false
+  }
+
+  return undefined
+}
+
 function parseLimit(limit: string | undefined): number | undefined {
   if (limit === undefined) {
     return undefined
@@ -84,8 +117,19 @@ export function registerDriveCommands(program: Command): void {
   const list = drive
     .command('list')
     .description('List drives')
+    .option('--name <text>', 'Filter by exact drive name')
+    .option('--private', 'Filter to private drives')
+    .option('--public', 'Filter to public drives')
+    .option('--archived', 'Filter to archived drives')
+    .option('--active', 'Filter to non-archived drives')
+    .option('--limit <n>', 'Maximum number of drives')
 
-  handleCommand(list, async () => await withClient(async (client) => await listDrives(client)))
+  handleCommand(list, async (options: DriveListOptions) => await withClient(async (client) => await listDrives(client, {
+    name: options.name,
+    private: resolvePrivate(options),
+    archived: resolveArchivedFilter(options),
+    limit: parseLimit(options.limit)
+  })))
 
   const get = drive
     .command('get')
@@ -111,15 +155,20 @@ export function registerDriveCommands(program: Command): void {
     .argument('<id>', 'Drive id')
     .option('--name <name>', 'Drive name')
     .option('--description <text>', 'Drive description')
+    .option('--clear-description', 'Clear the drive description')
     .option('--private', 'Set the drive to private')
     .option('--public', 'Set the drive to public')
     .option('--archive', 'Archive the drive')
     .option('--unarchive', 'Unarchive the drive')
 
   handleCommand(update, async (id: string, options: DriveUpdateOptions) => {
+    if (options.description !== undefined && options.clearDescription) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --description or --clear-description.', 4)
+    }
+
     return await withClient(async (client) => await updateDrive(client, id, {
       name: options.name,
-      description: options.description,
+      description: options.clearDescription ? null : options.description,
       private: resolvePrivate(options),
       archived: resolveArchived(options)
     }))
@@ -137,8 +186,15 @@ export function registerDriveCommands(program: Command): void {
   const folderList = folder
     .command('list')
     .description('List drive folders')
+    .option('--title <text>', 'Filter by exact folder title')
+    .option('--name <text>', 'Filter by exact folder name')
+    .option('--limit <n>', 'Maximum number of drive folders')
 
-  handleCommand(folderList, async () => await withClient(async (client) => await listDriveFolders(client)))
+  handleCommand(folderList, async (options: DriveResourceListOptions) => await withClient(async (client) => await listDriveFolders(client, {
+    title: options.title,
+    name: options.name,
+    limit: parseLimit(options.limit)
+  })))
 
   const folderGet = folder
     .command('get')
@@ -163,19 +219,17 @@ export function registerDriveCommands(program: Command): void {
     .argument('<id>', 'Drive folder id')
     .option('--title <title>', 'Drive folder title')
     .option('--name <name>', 'Drive folder name')
+    .option('--clear-name', 'Clear the drive folder name')
 
   handleCommand(folderUpdate, async (id: string, options: DriveResourceUpdateOptions) => {
-    return await withClient(async (client) => await updateDriveFolder(client, id, options))
-  })
+    if (options.name !== undefined && options.clearName) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --name or --clear-name.', 4)
+    }
 
-  const folderActivity = folder
-    .command('activity')
-    .description('List drive folder activity')
-    .argument('<id>', 'Drive folder id')
-    .option('--limit <n>', 'Maximum number of activity messages')
-
-  handleCommand(folderActivity, async (id: string, options: DriveActivityListOptions) => {
-    return await withClient(async (client) => await listDriveFolderActivity(client, id, parseLimit(options.limit)))
+    return await withClient(async (client) => await updateDriveFolder(client, id, {
+      title: options.title,
+      name: options.clearName ? null : options.name
+    }))
   })
 
   const folderDelete = folder
@@ -190,8 +244,15 @@ export function registerDriveCommands(program: Command): void {
   const fileList = file
     .command('list')
     .description('List drive files')
+    .option('--title <text>', 'Filter by exact file title')
+    .option('--name <text>', 'Filter by exact file name')
+    .option('--limit <n>', 'Maximum number of drive files')
 
-  handleCommand(fileList, async () => await withClient(async (client) => await listDriveFiles(client)))
+  handleCommand(fileList, async (options: DriveResourceListOptions) => await withClient(async (client) => await listDriveFiles(client, {
+    title: options.title,
+    name: options.name,
+    limit: parseLimit(options.limit)
+  })))
 
   const fileGet = file
     .command('get')
@@ -216,9 +277,17 @@ export function registerDriveCommands(program: Command): void {
     .argument('<id>', 'Drive file id')
     .option('--title <title>', 'Drive file title')
     .option('--name <name>', 'Drive file name')
+    .option('--clear-name', 'Clear the drive file name')
 
   handleCommand(fileUpdate, async (id: string, options: DriveResourceUpdateOptions) => {
-    return await withClient(async (client) => await updateDriveFile(client, id, options))
+    if (options.name !== undefined && options.clearName) {
+      throw new CliError('VALIDATION_ERROR', 'Use only one of --name or --clear-name.', 4)
+    }
+
+    return await withClient(async (client) => await updateDriveFile(client, id, {
+      ...options,
+      name: options.clearName ? null : options.name
+    }))
   })
 
   const fileActivity = file

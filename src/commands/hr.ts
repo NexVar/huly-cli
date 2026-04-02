@@ -44,6 +44,13 @@ type HrDepartmentUpdateOptions = {
 
 type HrRequestListOptions = {
   employee?: string
+  department?: string
+  type?: string
+  dateFrom?: string
+  dateTo?: string
+  dueDateFrom?: string
+  dueDateTo?: string
+  limit?: string
 }
 
 type HrRequestCreateOptions = {
@@ -66,6 +73,10 @@ type HrRequestUpdateOptions = {
 
 type HrPublicHolidayListOptions = {
   department?: string
+  title?: string
+  dateFrom?: string
+  dateTo?: string
+  limit?: string
 }
 
 type HrPublicHolidayCreateOptions = {
@@ -201,9 +212,19 @@ export function registerHrCommands(program: Command): void {
     .command('list')
     .description('List HR public holidays')
     .option('--department <id>', 'Filter by department id')
+    .option('--title <text>', 'Filter by exact public holiday title')
+    .option('--date-from <date>', 'Only include public holidays on or after this ISO-8601 date')
+    .option('--date-to <date>', 'Only include public holidays on or before this ISO-8601 date')
+    .option('--limit <n>', 'Maximum number of public holidays')
 
   handleCommand(publicHolidayList, async (options: HrPublicHolidayListOptions) => {
-    return await withClient(async (client) => await listHrPublicHolidays(client, options.department))
+    return await withClient(async (client) => await listHrPublicHolidays(client, {
+      departmentId: options.department,
+      title: options.title,
+      dateFrom: parseIsoDate(options.dateFrom, '--date-from'),
+      dateTo: parseIsoDate(options.dateTo, '--date-to'),
+      limit: parseLimit(options.limit)
+    }))
   })
 
   const publicHolidayGet = publicHoliday
@@ -261,9 +282,25 @@ export function registerHrCommands(program: Command): void {
     .command('list')
     .description('List HR requests')
     .option('--employee <id>', 'Filter by employee id')
+    .option('--department <id>', 'Filter by department id')
+    .option('--type <id>', 'Filter by request type id')
+    .option('--date-from <date>', 'Only include requests on or after this ISO-8601 date')
+    .option('--date-to <date>', 'Only include requests on or before this ISO-8601 date')
+    .option('--due-date-from <date>', 'Only include requests with due dates on or after this ISO-8601 date')
+    .option('--due-date-to <date>', 'Only include requests with due dates on or before this ISO-8601 date')
+    .option('--limit <n>', 'Maximum number of requests')
 
   handleCommand(requestList, async (options: HrRequestListOptions) => {
-    return await withClient(async (client) => await listHrRequests(client, options.employee))
+    return await withClient(async (client) => await listHrRequests(client, {
+      employeeId: options.employee,
+      departmentId: options.department,
+      typeId: options.type,
+      dateFrom: parseIsoDate(options.dateFrom, '--date-from'),
+      dateTo: parseIsoDate(options.dateTo, '--date-to'),
+      dueDateFrom: parseIsoDate(options.dueDateFrom, '--due-date-from'),
+      dueDateTo: parseIsoDate(options.dueDateTo, '--due-date-to'),
+      limit: parseLimit(options.limit)
+    }))
   })
 
   const requestGet = request
