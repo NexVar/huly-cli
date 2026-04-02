@@ -1,28 +1,161 @@
 import { Command, CommanderError } from 'commander'
-import { registerAuthCommands } from './commands/auth'
-import { registerBoardCommands } from './commands/board'
-import { registerCardCommands } from './commands/card'
-import { registerChatCommands } from './commands/chat'
-import { registerCommentCommands } from './commands/comment'
-import { registerComponentCommands } from './commands/component'
-import { registerDocumentCommands } from './commands/document'
-import { registerDriveCommands } from './commands/drive'
-import { registerHrCommands } from './commands/hr'
-import { registerIssueCommands } from './commands/issue'
-import { registerLabelCommands } from './commands/label'
-import { registerMemberCommands } from './commands/member'
-import { registerMilestoneCommands } from './commands/milestone'
-import { registerNotificationCommands } from './commands/notification'
-import { registerPersonCommands } from './commands/person'
-import { registerProjectCommands } from './commands/project'
-import { registerRawCommands } from './commands/raw'
-import { registerRecruitCommands } from './commands/recruit'
-import { registerSetupSkillCommand } from './commands/setup-skill'
-import { registerTeamspaceCommands } from './commands/teamspace'
-import { registerTimeCommands } from './commands/time'
 import { CliError, errorPayload, successPayload, writeErrorPayload, writeSuccessPayload } from './lib/output'
 
 const packageJson = require('../package.json') as { version?: string }
+
+type CommandLoader = (program: Command) => Promise<void>
+
+const commandLoaders = [
+  {
+    name: 'auth',
+    load: async (program: Command) => {
+      const { registerAuthCommands } = await import('./commands/auth')
+      registerAuthCommands(program)
+    }
+  },
+  {
+    name: 'board',
+    load: async (program: Command) => {
+      const { registerBoardCommands } = await import('./commands/board')
+      registerBoardCommands(program)
+    }
+  },
+  {
+    name: 'card',
+    load: async (program: Command) => {
+      const { registerCardCommands } = await import('./commands/card')
+      registerCardCommands(program)
+    }
+  },
+  {
+    name: 'chat',
+    load: async (program: Command) => {
+      const { registerChatCommands } = await import('./commands/chat')
+      registerChatCommands(program)
+    }
+  },
+  {
+    name: 'drive',
+    load: async (program: Command) => {
+      const { registerDriveCommands } = await import('./commands/drive')
+      registerDriveCommands(program)
+    }
+  },
+  {
+    name: 'hr',
+    load: async (program: Command) => {
+      const { registerHrCommands } = await import('./commands/hr')
+      registerHrCommands(program)
+    }
+  },
+  {
+    name: 'project',
+    load: async (program: Command) => {
+      const { registerProjectCommands } = await import('./commands/project')
+      registerProjectCommands(program)
+    }
+  },
+  {
+    name: 'issue',
+    load: async (program: Command) => {
+      const { registerIssueCommands } = await import('./commands/issue')
+      registerIssueCommands(program)
+    }
+  },
+  {
+    name: 'label',
+    load: async (program: Command) => {
+      const { registerLabelCommands } = await import('./commands/label')
+      registerLabelCommands(program)
+    }
+  },
+  {
+    name: 'member',
+    load: async (program: Command) => {
+      const { registerMemberCommands } = await import('./commands/member')
+      registerMemberCommands(program)
+    }
+  },
+  {
+    name: 'milestone',
+    load: async (program: Command) => {
+      const { registerMilestoneCommands } = await import('./commands/milestone')
+      registerMilestoneCommands(program)
+    }
+  },
+  {
+    name: 'notification',
+    load: async (program: Command) => {
+      const { registerNotificationCommands } = await import('./commands/notification')
+      registerNotificationCommands(program)
+    }
+  },
+  {
+    name: 'person',
+    load: async (program: Command) => {
+      const { registerPersonCommands } = await import('./commands/person')
+      registerPersonCommands(program)
+    }
+  },
+  {
+    name: 'raw',
+    load: async (program: Command) => {
+      const { registerRawCommands } = await import('./commands/raw')
+      registerRawCommands(program)
+    }
+  },
+  {
+    name: 'teamspace',
+    load: async (program: Command) => {
+      const { registerTeamspaceCommands } = await import('./commands/teamspace')
+      registerTeamspaceCommands(program)
+    }
+  },
+  {
+    name: 'doc',
+    load: async (program: Command) => {
+      const { registerDocumentCommands } = await import('./commands/document')
+      registerDocumentCommands(program)
+    }
+  },
+  {
+    name: 'component',
+    load: async (program: Command) => {
+      const { registerComponentCommands } = await import('./commands/component')
+      registerComponentCommands(program)
+    }
+  },
+  {
+    name: 'comment',
+    load: async (program: Command) => {
+      const { registerCommentCommands } = await import('./commands/comment')
+      registerCommentCommands(program)
+    }
+  },
+  {
+    name: 'recruit',
+    load: async (program: Command) => {
+      const { registerRecruitCommands } = await import('./commands/recruit')
+      registerRecruitCommands(program)
+    }
+  },
+  {
+    name: 'time',
+    load: async (program: Command) => {
+      const { registerTimeCommands } = await import('./commands/time')
+      registerTimeCommands(program)
+    }
+  },
+  {
+    name: 'setup-skill',
+    load: async (program: Command) => {
+      const { registerSetupSkillCommand } = await import('./commands/setup-skill')
+      registerSetupSkillCommand(program)
+    }
+  }
+] as const
+
+const commandLoaderMap = new Map<string, CommandLoader>(commandLoaders.map(({ name, load }) => [name, load]))
 
 type HelpArgument = {
   name: string
@@ -52,7 +185,9 @@ type HelpPayload = {
   commands: HelpCommand[]
 }
 
-export function buildProgram(): Command {
+type RequestedNamespace = 'all' | 'none' | string
+
+function createProgram(): Command {
   const program = new Command()
 
   program
@@ -67,28 +202,55 @@ export function buildProgram(): Command {
       }
     })
 
-  registerAuthCommands(program)
-  registerBoardCommands(program)
-  registerCardCommands(program)
-  registerChatCommands(program)
-  registerDriveCommands(program)
-  registerHrCommands(program)
-  registerProjectCommands(program)
-  registerIssueCommands(program)
-  registerLabelCommands(program)
-  registerMemberCommands(program)
-  registerMilestoneCommands(program)
-  registerNotificationCommands(program)
-  registerPersonCommands(program)
-  registerRawCommands(program)
-  registerTeamspaceCommands(program)
-  registerDocumentCommands(program)
-  registerComponentCommands(program)
-  registerCommentCommands(program)
-  registerRecruitCommands(program)
-  registerTimeCommands(program)
-  registerSetupSkillCommand(program)
+  return program
+}
 
+function getRequestedNamespace(argv: string[]): RequestedNamespace {
+  const args = argv.slice(2)
+  const [first, second] = args
+
+  if (args.includes('--version') || args.includes('-V')) {
+    return 'none'
+  }
+
+  if (first === 'help') {
+    return second !== undefined && commandLoaderMap.has(second) ? second : 'all'
+  }
+
+  return first !== undefined && commandLoaderMap.has(first) ? first : 'all'
+}
+
+async function loadAllCommands(program: Command): Promise<void> {
+  for (const { load } of commandLoaders) {
+    await load(program)
+  }
+}
+
+async function loadRequestedCommands(program: Command, argv: string[]): Promise<void> {
+  const requestedNamespace = getRequestedNamespace(argv)
+
+  if (requestedNamespace === 'none') {
+    return
+  }
+
+  if (requestedNamespace === 'all') {
+    await loadAllCommands(program)
+    return
+  }
+
+  const load = commandLoaderMap.get(requestedNamespace)
+
+  if (!load) {
+    await loadAllCommands(program)
+    return
+  }
+
+  await load(program)
+}
+
+export async function buildProgram(argv: string[] = []): Promise<Command> {
+  const program = createProgram()
+  await loadRequestedCommands(program, argv)
   return program
 }
 
@@ -197,7 +359,7 @@ function toCliError(error: unknown): CliError {
 }
 
 export async function main(argv: string[]): Promise<void> {
-  const program = buildProgram()
+  const program = await buildProgram(argv)
 
   try {
     if (handleMetadataRequest(program, argv)) {
