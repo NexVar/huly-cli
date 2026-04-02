@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { access } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
@@ -112,6 +113,11 @@ class CliCommandError extends Error {
   }
 }
 
+type RunContext = {
+  cwd?: string
+  env?: NodeJS.ProcessEnv
+}
+
 async function main(): Promise<void> {
   await requireBuiltCli()
 
@@ -120,8 +126,13 @@ async function main(): Promise<void> {
 
   const authStatus = await runCliJson<Record<string, unknown>>(['auth', 'status'])
   assert.equal(authStatus.configured, true, 'auth status must report configured=true')
+  const authConnection = expectRecord(authStatus.connection, 'auth status connection')
+  const authUrl = expectString(authConnection.url, 'auth status connection.url')
+  const authWorkspace = expectString(authConnection.workspace, 'auth status connection.workspace')
+
   expectRecord(authStatus.account, 'auth status account')
   log('Auth status OK')
+  await exerciseIsolatedAuthRoundtrip(authUrl, authWorkspace)
 
   const projectsPayload = await runCli<ProjectSummary[]>(['project', 'list'])
   assert.equal(projectsPayload.total, projectsPayload.data.length, 'project list total must match array length')
@@ -204,6 +215,101 @@ async function requireBuiltCli(): Promise<void> {
   } catch {
     throw new Error(`Built CLI not found at ${cliRelativePath}. Run "npm run build" first.`)
   }
+}
+
+async function exerciseIsolatedAuthRoundtrip(url: string, workspace: string): Promise<void> {
+  log('Exercising isolated token auth login/status/logout')
+
+  const token = await resolveAuthToken()
+  const tempHome = await mkdtemp(path.join(tmpdir(), 'huly-cli-smoke-home-'))
+  const tempCwd = await mkdtemp(path.join(tmpdir(), 'huly-cli-smoke-cwd-'))
+  const isolatedEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: tempHome,
+    USERPROFILE: tempHome,
+    HULY_URL: '',
+    HULY_WORKSPACE: '',
+    HULY_EMAIL: '',
+    HULY_PASSWORD: '',
+    HULY_TOKEN: ''
+  }
+
+  try {
+    const login = await runCliJson<{ saved: boolean }>([
+      'auth',
+      'login',
+      '--url',
+      url,
+      '--workspace',
+      workspace,
+      '--token',
+      token
+    ], {
+      cwd: tempCwd,
+      env: isolatedEnv
+    })
+    assert.equal(login.saved, true, 'isolated auth login must save config')
+
+    const status = await runCliJson<Record<string, unknown>>(['auth', 'status'], {
+      cwd: tempCwd,
+      env: isolatedEnv
+    })
+    assert.equal(status.configured, true, 'isolated auth status must report configured=true')
+    const configSource = expectRecord(status.configSource, 'isolated auth status configSource')
+    assert.equal(configSource.file !== null, true, 'isolated auth status must resolve file config')
+    const statusConnection = expectRecord(status.connection, 'isolated auth status connection')
+    assert.equal(expectString(statusConnection.authMethod, 'isolated auth status authMethod'), 'token', 'isolated auth status must use token auth')
+
+    const logout = await runCliJson<{ removed: boolean }>(['auth', 'logout'], {
+      cwd: tempCwd,
+      env: isolatedEnv
+    })
+    assert.equal(logout.removed, true, 'isolated auth logout must remove temp config')
+  } finally {
+    await rm(tempHome, { recursive: true, force: true })
+    await rm(tempCwd, { recursive: true, force: true })
+  }
+}
+
+async function resolveAuthToken(): Promise<string> {
+  const envToken = process.env.HULY_TOKEN
+
+  if (typeof envToken === 'string' && envToken.trim().length > 0) {
+    return envToken.trim()
+  }
+
+  const envPath = path.join(repoRoot, '.env')
+  const envRaw = await readFile(envPath, 'utf8')
+  const lines = envRaw.split(/\r?\n/)
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+
+    if (trimmed.length === 0 || trimmed.startsWith('#')) {
+      continue
+    }
+
+    const separator = trimmed.indexOf('=')
+    if (separator <= 0) {
+      continue
+    }
+
+    const key = trimmed.slice(0, separator).trim()
+    if (key !== 'HULY_TOKEN') {
+      continue
+    }
+
+    const rawValue = trimmed.slice(separator + 1).trim()
+    const unquoted = rawValue.replace(/^['"]|['"]$/g, '').trim()
+
+    if (unquoted.length === 0) {
+      break
+    }
+
+    return unquoted
+  }
+
+  throw new Error('Unable to resolve HULY_TOKEN for isolated auth smoke. Set HULY_TOKEN or add it to .env.')
 }
 
 async function exerciseIssueRelations(issueIdentifier: string, relatedIdentifier: string): Promise<void> {
@@ -723,11 +829,11 @@ async function deleteIssue(identifier: string): Promise<void> {
   assert.equal(deleted.identifier, identifier, 'issue cleanup delete must return the deleted identifier')
 }
 
-async function runCliJson<T>(args: string[]): Promise<T> {
-  return (await runCli<T>(args)).data
+async function runCliJson<T>(args: string[], context: RunContext = {}): Promise<T> {
+  return (await runCli<T>(args, context)).data
 }
 
-async function runCli<T>(args: string[]): Promise<SuccessPayload<T>> {
+async function runCli<T>(args: string[], context: RunContext = {}): Promise<SuccessPayload<T>> {
   const command = formatCommand(args)
   let stdout = ''
   let stderr = ''
@@ -735,8 +841,8 @@ async function runCli<T>(args: string[]): Promise<SuccessPayload<T>> {
 
   try {
     const result = await execFileAsync(process.execPath, [cliPath, ...args], {
-      cwd: repoRoot,
-      env: process.env,
+      cwd: context.cwd ?? repoRoot,
+      env: context.env ?? process.env,
       maxBuffer: 10 * 1024 * 1024
     })
     stdout = result.stdout
