@@ -49,6 +49,7 @@ Additional implemented commands:
 - `hr request-type list`
 - `hr request list|get|create|update|delete`
 - `notification list|get|read|unread|archive|unarchive`
+- `raw list|get|create|update|delete|add-collection`
 - `recruit vacancy list|get|create|update|delete`
 - `recruit applicant-status list`
 - `recruit applicant list|get|create|update|move|delete`
@@ -61,8 +62,12 @@ Additional implemented commands:
 
 Current scope details:
 
-- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `board`, `card`, `chat`, `drive`, `hr`, `notification`, `recruit`, `time`, `setup-skill`
+- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `board`, `card`, `chat`, `drive`, `hr`, `notification`, `raw`, `recruit`, `time`, `setup-skill`
 - Remaining parity gaps are now narrower and mostly around deeper entity coverage inside the newly added Phase 5 modules, not complete absence of those namespaces.
+
+Current `raw` scope:
+
+- `raw` provides low-level document and attached-collection access for automation when a dedicated higher-level namespace is not available yet.
 
 Current `time` scope:
 

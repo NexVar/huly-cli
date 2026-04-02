@@ -15,6 +15,7 @@ import { registerMilestoneCommands } from './commands/milestone'
 import { registerNotificationCommands } from './commands/notification'
 import { registerPersonCommands } from './commands/person'
 import { registerProjectCommands } from './commands/project'
+import { registerRawCommands } from './commands/raw'
 import { registerRecruitCommands } from './commands/recruit'
 import { registerSetupSkillCommand } from './commands/setup-skill'
 import { registerTeamspaceCommands } from './commands/teamspace'
@@ -79,6 +80,7 @@ export function buildProgram(): Command {
   registerMilestoneCommands(program)
   registerNotificationCommands(program)
   registerPersonCommands(program)
+  registerRawCommands(program)
   registerTeamspaceCommands(program)
   registerDocumentCommands(program)
   registerComponentCommands(program)

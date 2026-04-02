@@ -51,6 +51,7 @@ test('main returns JSON for --help', async () => {
   assert.ok(payload.data.commands.some((command) => command.name === 'drive'))
   assert.ok(payload.data.commands.some((command) => command.name === 'hr'))
   assert.ok(payload.data.commands.some((command) => command.name === 'notification'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'raw'))
   assert.ok(payload.data.commands.some((command) => command.name === 'recruit'))
   assert.ok(payload.data.commands.some((command) => command.name === 'time'))
   assert.ok(payload.data.commands.some((command) => command.name === 'setup-skill'))
@@ -909,6 +910,109 @@ test('main returns JSON for time report totals help with description and value f
   assert.ok(payload.data.options.some((option) => option.flags === '--date-to <date>'))
   assert.ok(payload.data.options.some((option) => option.flags === '--value-from <hours>'))
   assert.ok(payload.data.options.some((option) => option.flags === '--value-to <hours>'))
+})
+
+test('main returns JSON for raw help', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'raw', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      commands: Array<{ name: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'raw')
+  assert.ok(payload.data.commands.some((command) => command.name === 'list'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'get'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'update'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'add-collection'))
+})
+
+test('main returns JSON for raw list help with class and query options', async () => {
+  const { stdout, stderr } = await captureStreams(async () => {
+    await main(['node', 'huly', 'raw', 'list', '--help'])
+  })
+
+  assert.equal(stderr, '')
+
+  const payload = JSON.parse(stdout) as {
+    ok: boolean
+    data: {
+      command: string
+      options: Array<{ flags: string }>
+    }
+  }
+
+  assert.equal(payload.ok, true)
+  assert.equal(payload.data.command, 'list')
+  assert.ok(payload.data.options.some((option) => option.flags.startsWith('--class ')))
+  assert.ok(payload.data.options.some((option) => option.flags.startsWith('--query ')))
+  assert.ok(payload.data.options.some((option) => option.flags.startsWith('--options ')))
+})
+
+test('main rejects invalid raw list query JSON', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main(['node', 'huly', 'raw', 'list', '--query', '{'])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.match(payload.error.message, /--query/)
+    assert.match(payload.error.message, /json/i)
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
+})
+
+test('main rejects invalid raw create data JSON', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main(['node', 'huly', 'raw', 'create', '--data', '{'])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.match(payload.error.message, /--data/)
+    assert.match(payload.error.message, /json/i)
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
 })
 
 test('main rejects conflicting time todo description update flags', async () => {
