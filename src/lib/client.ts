@@ -243,7 +243,14 @@ async function connectClientOnce(resolvedConfig: AuthConfig): Promise<{ client: 
     },
     fetchMarkup: async (...args) => await markupOps.fetchMarkup(...args),
     uploadMarkup: async (...args) => await markupOps.uploadMarkup(...args),
-    close: async () => {}
+    close: async () => {
+      if (!txOpsPromise) {
+        return
+      }
+
+      const txOps = await txOpsPromise as unknown as { close?: () => Promise<void> | void }
+      await txOps.close?.()
+    }
   }
 
   return { client, config: resolvedConfig }
