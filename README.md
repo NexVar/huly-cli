@@ -20,11 +20,14 @@ Requires **Node.js 20+**.
 
 ## Give it to your AI agent
 
-`huly` ships with a ready-made skill file that teaches any AI agent how to use it.
+Want your AI agent (Claude Code, Cursor, Windsurf, Copilot, etc.) to manage your Huly workspace? Copy-paste this prompt:
 
-1. Install the CLI (see above).
-2. Open [`SKILL.md`](./SKILL.md) and copy its contents into your agent's skill / prompt / instruction slot.
-3. Done — the agent can now read and write your Huly workspace.
+```
+Go to https://github.com/NexVar/huly-cli and install the huly CLI.
+Then add the skill file from https://github.com/NexVar/huly-cli/blob/main/SKILL.md to your skills.
+```
+
+That's it. The agent will install `@nexvar/huly` and learn every available command from the skill file.
 
 > Keep secrets out of tracked files. Use environment variables or a local `.env` instead.
 
