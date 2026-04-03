@@ -4,6 +4,10 @@
 
 The project exposes the Huly platform client through dedicated first-class commands plus the generic `raw` layer for the remaining document, collection, mixin, and markup operations.
 
+Agent install assets:
+
+- [`SKILL.md`](./SKILL.md): reusable skill/instruction file for agents that should use `huly`
+
 ## Priorities
 
 - Performance-first CLI execution
@@ -187,6 +191,21 @@ Run without global install:
 ```bash
 npx @nexvar/huly --help
 ```
+
+Install the skill into your preferred AI agent:
+
+1. Install the CLI first with `npm install -g @nexvar/huly` or use `npx @nexvar/huly`.
+2. Open [`SKILL.md`](./SKILL.md).
+3. Copy that content into the target agent's skill, prompt, tool, or reusable-instruction location.
+4. Keep secrets out of tracked files; prefer environment variables or a local untracked `.env`.
+5. Verify the install with:
+
+```bash
+huly --help
+huly auth status
+```
+
+If the target agent cannot install persistent skills, save the `SKILL.md` text as a reusable local instruction file and tell the agent to use `huly` for Huly workspace tasks.
 
 Tooling baseline:
 
