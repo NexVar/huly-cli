@@ -67,8 +67,9 @@ Current scope details:
 
 Current `raw` scope:
 
-- `raw` provides low-level document, attached-collection, and mixin access for automation when a dedicated higher-level namespace is not available yet.
+- `raw` provides low-level document, attached-collection, mixin, and markup access for automation when a dedicated higher-level namespace is not available yet.
 - `raw` now supports `list|get|create|update|delete`, `add-collection|update-collection|remove-collection`, `create-mixin|update-mixin`, and direct `fetch-markup|upload-markup` helpers.
+- `raw upload-markup` attaches the uploaded markup back to the target field by default; use `--upload-only` when you want only the standalone markup ref.
 - Raw JSON payloads now support markup-backed fields through objects shaped like `{ "$markup": { "format": "markdown", "content": "..." } }`.
 - `raw get` and `raw list` also support `--markup-fields` so callers can resolve selected markup attributes inline instead of only seeing blob refs.
 - The main remaining `raw` limitation is discovery ergonomics: callers still need to know the relevant class, space, collection, mixin, and markup attribute ids.
