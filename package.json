@@ -1,5 +1,5 @@
 {
-  "name": "huly-cli",
+  "name": "huly",
   "version": "1.0.0",
   "description": "CLI for the Huly Platform API with JSON-first output",
   "keywords": [
@@ -17,6 +17,9 @@
   "bugs": {
     "url": "https://github.com/NexVar/huly-cli/issues"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "license": "MIT",
   "engines": {
     "node": ">=20"
@@ -25,8 +28,7 @@
     "huly": "./dist/bin/huly.js"
   },
   "files": [
-    "dist",
-    ".claude/commands/huly.md"
+    "dist"
   ],
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",

@@ -145,13 +145,6 @@ const commandLoaders = [
       const { registerTimeCommands } = await import('./commands/time')
       registerTimeCommands(program)
     }
-  },
-  {
-    name: 'setup-skill',
-    load: async (program: Command) => {
-      const { registerSetupSkillCommand } = await import('./commands/setup-skill')
-      registerSetupSkillCommand(program)
-    }
   }
 ] as const
 

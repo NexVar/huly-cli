@@ -54,7 +54,6 @@ test('main returns JSON for --help', async () => {
   assert.ok(payload.data.commands.some((command) => command.name === 'raw'))
   assert.ok(payload.data.commands.some((command) => command.name === 'recruit'))
   assert.ok(payload.data.commands.some((command) => command.name === 'time'))
-  assert.ok(payload.data.commands.some((command) => command.name === 'setup-skill'))
 })
 
 test('main returns JSON for nested command help', async () => {

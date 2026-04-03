@@ -58,11 +58,10 @@ Additional implemented commands:
 - `recruit opinion list|get|create|update|delete`
 - `time list|get|create|update|done|open|delete`
 - `time report list|get|totals|create|update|delete`
-- `setup-skill`
 
 Current scope details:
 
-- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `board`, `card`, `chat`, `drive`, `hr`, `notification`, `raw`, `recruit`, `time`, `setup-skill`
+- Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `board`, `card`, `chat`, `drive`, `hr`, `notification`, `raw`, `recruit`, `time`
 - The CLI combines dedicated namespaces with `raw` coverage for the remaining generic platform-client operations.
 
 Current `raw` scope:
@@ -177,6 +176,18 @@ npm install
 npm run build
 ```
 
+Install from npm after publish:
+
+```bash
+npm install -g huly
+```
+
+Run without global install:
+
+```bash
+npx huly --help
+```
+
 Tooling baseline:
 
 - Node.js `>=20`
@@ -192,12 +203,6 @@ Run the built CLI:
 
 ```bash
 node dist/bin/huly.js project list
-```
-
-Install the bundled AI skill into the current project:
-
-```bash
-node dist/bin/huly.js setup-skill
 ```
 
 JSON metadata output:
@@ -291,7 +296,6 @@ node dist/bin/huly.js card list --type Card --limit 10
 node dist/bin/huly.js notification list --limit 10
 node dist/bin/huly.js time list --limit 10
 node dist/bin/huly.js time report list --limit 10
-node dist/bin/huly.js setup-skill
 ```
 
 Create an issue:
@@ -502,13 +506,6 @@ npm run dev -- notification read 69b6f98faf221468336cced8
 npm run dev -- notification archive 69b6f98faf221468336cced8
 ```
 
-Install the bundled agent skill:
-
-```bash
-npm run dev -- setup-skill
-npm run dev -- setup-skill --dir /path/to/project --force
-```
-
 ## Output Contract
 
 Success goes to stdout:
@@ -551,7 +548,6 @@ Exit codes:
 - `label list --project <identifier>` returns labels currently referenced by issues in that project, because Huly issue labels are workspace-scoped tags rather than project-owned records.
 - Connection bootstrap now retries transient network failures with a short exponential backoff instead of failing on the first dropped request.
 - The build clears `dist` and excludes test files from the published tarball, which keeps the package leaner.
-- `setup-skill` is purely local filesystem work and ships the bundled skill markdown directly in the package.
 
 ## Implementation Notes
 
@@ -561,7 +557,6 @@ Exit codes:
 - Components are implemented as tracker-scoped docs in the project space.
 - Comments are implemented as `@hcengineering/chunter` chat messages attached to the parent object's `comments` collection.
 - Notifications are implemented as `@hcengineering/notification` inbox docs scoped to the current authenticated account.
-- The packaged AI skill is bundled at `.claude/commands/huly.md` and can be installed into another project with `huly setup-skill`.
 - Document content is stored through the explicit markup upload path, which now works for both `doc` content and issue descriptions.
 - `removeDoc` is wired for issue deletion and passed live smoke tests. Additional cross-deployment verification is useful future evidence, not a current release blocker.
 - The current TypeScript/compiler setup is on the latest stable 5.9 line; `tsconfig` modernization for newer Node-specific compiler modes is a separate optimization step rather than a functional blocker.
