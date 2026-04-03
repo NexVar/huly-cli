@@ -34,6 +34,8 @@ type RawMarkupPayload = {
   format: MarkupFormat
   ref?: string
   content?: string
+  attached?: boolean
+  space?: string
 }
 
 function isJsonObject(value: unknown): value is JsonObject {
@@ -518,21 +520,65 @@ export async function uploadRawMarkup(
   objectId: string,
   attribute: string,
   content: string,
-  format: MarkupFormat
+  format: MarkupFormat,
+  attachToField = true
 ): Promise<RawMarkupPayload> {
-  const ref = await client.uploadMarkup(
-    objectClass as Ref<Class<Doc>>,
-    objectId as Ref<Doc>,
-    attribute,
-    content,
-    format
-  )
+  let ref: string
+  let space: string | undefined
+
+  if (attachToField) {
+    const object = await client.findOne(
+      objectClass as Ref<Class<Doc>>,
+      { _id: objectId as never }
+    ) as Record<string, unknown> | undefined
+
+    if (!object) {
+      throw new CliError('NOT_FOUND', `Document '${objectId}' not found in class '${objectClass}'.`, 3)
+    }
+
+    if (typeof object.space !== 'string' || object.space.length === 0) {
+      throw new CliError('VALIDATION_ERROR', `Unable to infer space for '${objectId}'. Use --upload-only to skip field attachment.`, 4)
+    }
+
+    space = object.space
+
+    await client.updateDoc(
+      objectClass as Ref<Class<Doc>>,
+      space as Ref<Space>,
+      objectId as Ref<Doc>,
+      {
+        [attribute]: new MarkupContent(content, format)
+      } as DocumentUpdate<Doc>
+    )
+
+    const refreshed = await client.findOne(
+      objectClass as Ref<Class<Doc>>,
+      { _id: objectId as never }
+    ) as Record<string, unknown> | undefined
+
+    if (!refreshed || typeof refreshed[attribute] !== 'string' || refreshed[attribute].length === 0) {
+      throw new CliError('GENERAL_ERROR', `Failed to resolve markup ref for '${attribute}' after attachment.`, 1)
+    }
+
+    ref = refreshed[attribute] as string
+  } else {
+    const uploadedRef = await client.uploadMarkup(
+      objectClass as Ref<Class<Doc>>,
+      objectId as Ref<Doc>,
+      attribute,
+      content,
+      format
+    )
+
+    ref = uploadedRef as string
+  }
 
   return {
     objectId,
     objectClass,
     attribute,
     format,
-    ref: ref as string
+    ref,
+    ...(attachToField ? { attached: true, space } : { attached: false })
   }
 }

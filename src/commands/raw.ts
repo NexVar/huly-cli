@@ -115,6 +115,7 @@ type RawUploadMarkupOptions = {
   content?: string
   contentFile?: string
   format?: string
+  uploadOnly?: boolean
 }
 
 export function registerRawCommands(program: Command): void {
@@ -407,6 +408,7 @@ export function registerRawCommands(program: Command): void {
     .option('--content <text>', 'Markup content text')
     .option('--content-file <path>', 'Read markup content from a file')
     .option('--format <format>', 'Markup format: markdown, html, or markup')
+    .option('--upload-only', 'Only create a markup ref without attaching it back to the document field')
 
   handleCommand(uploadMarkup, async (options: RawUploadMarkupOptions) => {
     const objectId = requireFlagValue(options.objectId, '--object-id')
@@ -421,7 +423,8 @@ export function registerRawCommands(program: Command): void {
       objectId,
       attribute,
       requireFlagValue(content, '--content or --content-file'),
-      format
+      format,
+      !options.uploadOnly
     ))
   })
 }

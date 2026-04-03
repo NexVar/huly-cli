@@ -91,8 +91,4 @@ Fresh live smoke coverage includes:
 
 ## Remaining Note
 
-One low-level platform semantic issue remains documented in [`issues.md`](/home/batuhan4/github/huly-cli/issues.md):
-
-- standalone `raw upload-markup` returns a ref, but same-field standalone roundtrip semantics on existing markup-backed docs remain ambiguous in live verification
-
-That issue does not block PRD command/API parity because generic markup reads are verified, generic markup writes are verified through `$markup` on create/update paths, and the raw standalone upload command is exposed for completeness.
+There are currently no open parity issues recorded in [`issues.md`](/home/batuhan4/github/huly-cli/issues.md).

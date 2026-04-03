@@ -185,6 +185,8 @@ type RawMarkupSummary = {
   format: 'markdown' | 'html' | 'markup'
   ref?: string
   content?: string
+  attached?: boolean
+  space?: string
 }
 
 class CliCommandError extends Error {
@@ -223,6 +225,26 @@ function isRetryableCliBootstrapFailure(stderr: string): boolean {
 type RunContext = {
   cwd?: string
   env?: NodeJS.ProcessEnv
+}
+
+async function retryOnNotFound<T>(label: string, fn: () => Promise<T>, retries = 3, delayMs = 500): Promise<T> {
+  let attempt = 0
+  let nextDelayMs = delayMs
+
+  for (;;) {
+    try {
+      return await fn()
+    } catch (error) {
+      if (!(error instanceof CliCommandError) || error.payload.error.code !== 'NOT_FOUND' || attempt >= retries) {
+        throw error
+      }
+
+      attempt += 1
+      log(`Retrying eventual-consistency failure (${attempt}/${retries}) for ${label}`)
+      await sleep(nextDelayMs)
+      nextDelayMs *= 2
+    }
+  }
 }
 
 async function main(): Promise<void> {
@@ -264,23 +286,23 @@ async function main(): Promise<void> {
       const project = await exerciseProjectLifecycle()
       projectIdentifier = project.identifier
 
-      issueOneIdentifier = (await runCliJson<IssueSummary>([
+      issueOneIdentifier = (await retryOnNotFound('issue create 1', async () => await runCliJson<IssueSummary>([
         'issue',
         'create',
         '--project',
         projectIdentifier,
         '--title',
         `${prefix}-issue-1`
-      ])).identifier
+      ]))).identifier
 
-      issueTwoIdentifier = (await runCliJson<IssueSummary>([
+      issueTwoIdentifier = (await retryOnNotFound('issue create 2', async () => await runCliJson<IssueSummary>([
         'issue',
         'create',
         '--project',
         projectIdentifier,
         '--title',
         `${prefix}-issue-2`
-      ])).identifier
+      ]))).identifier
 
       log(`Created project ${projectIdentifier} with issues ${issueOneIdentifier} and ${issueTwoIdentifier}`)
 
@@ -932,6 +954,33 @@ async function exerciseTeamspaceDocuments(): Promise<void> {
     ])
     assert.equal(uploadedChildMarkup.objectId, childDocId, 'raw upload-markup must target the child document')
     assert.ok(typeof uploadedChildMarkup.ref === 'string' && uploadedChildMarkup.ref.length > 0, 'raw upload-markup must return a markup ref')
+    assert.equal(uploadedChildMarkup.attached, true, 'raw upload-markup must attach the uploaded ref by default')
+
+    const rawUpdatedChildDoc = await runCliJson<Record<string, unknown>>([
+      'raw',
+      'get',
+      '--class',
+      DOCUMENT_CLASS,
+      '--id',
+      childDocId
+    ])
+    assert.equal(readString(rawUpdatedChildDoc, 'content'), uploadedChildMarkup.ref!, 'raw upload-markup must update the document field ref')
+
+    const fetchedUploadedMarkup = await runCliJson<RawMarkupSummary>([
+      'raw',
+      'fetch-markup',
+      '--object-id',
+      childDocId,
+      '--object-class',
+      DOCUMENT_CLASS,
+      '--attribute',
+      'content',
+      '--ref',
+      uploadedChildMarkup.ref!,
+      '--format',
+      'markdown'
+    ])
+    assert.equal(fetchedUploadedMarkup.content, `${prefix}-doc-child-uploaded`, 'raw fetch-markup must load uploaded standalone markup after attachment')
 
     const rootDocs = await runCli<DocumentSummary[]>([
       'doc',
@@ -954,7 +1003,7 @@ async function exerciseTeamspaceDocuments(): Promise<void> {
     assert.ok(childDocs.data.some((doc) => doc.id === childDocId), 'child document list must include the nested child document')
 
     const loadedChild = await runCliJson<DocumentSummary>(['doc', 'get', childDocId])
-    assert.equal(loadedChild.content, `${prefix}-doc-child-content`, 'document get must return the created markdown content')
+    assert.equal(loadedChild.content, `${prefix}-doc-child-uploaded`, 'document get must return the uploaded markdown content after raw upload-markup attachment')
 
     const rawLoadedChild = await runCliJson<Record<string, unknown>>([
       'raw',
@@ -966,7 +1015,7 @@ async function exerciseTeamspaceDocuments(): Promise<void> {
       '--markup-fields',
       'content'
     ])
-    assert.equal(readString(rawLoadedChild, 'content'), `${prefix}-doc-child-content`, 'raw get --markup-fields must resolve document content as markdown')
+    assert.equal(readString(rawLoadedChild, 'content'), `${prefix}-doc-child-uploaded`, 'raw get --markup-fields must resolve the uploaded document content as markdown')
 
     const movedChild = await runCliJson<DocumentSummary>([
       'doc',
