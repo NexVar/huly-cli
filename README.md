@@ -2,7 +2,7 @@
 
 `huly-cli` is a JSON-first command line client for the Huly Platform API, aimed at scripts, CI jobs, and AI agents that need predictable shell commands instead of ad hoc TypeScript snippets.
 
-The project now satisfies the PRD's API-parity goal through dedicated first-class commands plus the generic `raw` layer for the remaining platform-client document, collection, mixin, and markup operations.
+The project exposes the Huly platform client through dedicated first-class commands plus the generic `raw` layer for the remaining document, collection, mixin, and markup operations.
 
 ## Priorities
 
@@ -63,7 +63,7 @@ Additional implemented commands:
 Current scope details:
 
 - Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `board`, `card`, `chat`, `drive`, `hr`, `notification`, `raw`, `recruit`, `time`, `setup-skill`
-- PRD parity is satisfied by combining these dedicated namespaces with `raw` coverage for the remaining generic platform-client operations.
+- The CLI combines dedicated namespaces with `raw` coverage for the remaining generic platform-client operations.
 
 Current `raw` scope:
 
@@ -82,7 +82,7 @@ Current `time` scope:
 - `time list` now supports exact `--title`, exact `--priority`, and due-date range filters through `--due-date-from` / `--due-date-to`.
 - `time report list` and `time report totals` now support exact `--description` plus numeric `--value-from` / `--value-to` filtering.
 - `time update` now supports both `--clear-description` and `--clear-due-date` for todos, `time report update` supports `--clear-description` for report notes, and todo due dates follow the same ISO-8601 validation path as the rest of the CLI.
-- Higher-level time-reporting ergonomics can still grow, but PRD reachability is already covered by the current `time` commands plus `raw`.
+- Higher-level time-reporting ergonomics can still grow, but the current `time` commands plus `raw` already cover the reachable operation surface.
 
 Current `card` scope:
 
@@ -168,7 +168,7 @@ Verification snapshot:
   - `npm run smoke` runs against the current live workspace, includes an isolated token auth `login|status|logout` round-trip in a temporary home directory, uses disposable `cli-smoke-auto-*` resources, snapshots the built CLI into `.omx/smoke-runs/`, and cleans everything up after the run.
 - Live verification: built CLI auth via token, project CRUD, teamspace/person CRUD plus exact list filters, clear flows, and cleanup, nested doc hierarchy create/list/update/delete flows in a disposable teamspace, milestone/label/component CRUD plus label assign/unassign cleanup, board column/status flows plus board list `--limit`, board-card title/location/archived-state filters, status-aware move flows, member filtering, and cleanup, card parent/move flows plus custom card-type `--clear-color` / `--clear-background`, chat channel exact name/member/kind/private/public/archived filters plus `--clear-topic` / `--clear-description`, drive list `--limit`, drive space/folder/file activity reads plus drive space clear-description, drive folder/file clear-name flows, and drive folder/file exact title/name list filters with cleanup, hr department clear-parent/team-lead plus clear-description flows, hr public-holiday title/date/limit plus clear-description flows, hr request clear-due-date plus clear-description flows, read-only notification class/object/type filters against the real inbox, recruit vacancy full-description plus private/public/archived/active filters and applicantCount validation, recruit applicant identifier/filter/clear/move flows, recruit candidate exact name/city/title/source/remote/onsite filters, recruit review verdict/location filters, recruit opinion value filters, recruit candidate/review/opinion CRUD including candidate clear/toggle flows and review/opinion clear-description flows with cleanup, `time list` title/priority/due-date-range filters, `time report list` description/value-range filters, `time report totals` description/value-range filtering, `time update --clear-description|--clear-due-date`, `time report update --clear-description`, and `time report totals` day-bucket aggregation with `--date-from` filtering
 - Live verification also now covers `raw fetch-markup`, `raw update-collection`, `raw remove-collection`, `raw create-mixin`, and `raw update-mixin` against disposable document, card-role, and recruit-candidate targets.
-- The README reflects verified commands only. Open follow-up items, if any, are tracked in `issues.md`.
+- The README reflects verified commands only.
 
 ## Install
 
@@ -563,5 +563,5 @@ Exit codes:
 - Notifications are implemented as `@hcengineering/notification` inbox docs scoped to the current authenticated account.
 - The packaged AI skill is bundled at `.claude/commands/huly.md` and can be installed into another project with `huly setup-skill`.
 - Document content is stored through the explicit markup upload path, which now works for both `doc` content and issue descriptions.
-- `removeDoc` is wired for issue deletion and passed live smoke tests. Additional cross-deployment verification is useful future evidence, not a current PRD blocker.
+- `removeDoc` is wired for issue deletion and passed live smoke tests. Additional cross-deployment verification is useful future evidence, not a current release blocker.
 - The current TypeScript/compiler setup is on the latest stable 5.9 line; `tsconfig` modernization for newer Node-specific compiler modes is a separate optimization step rather than a functional blocker.
