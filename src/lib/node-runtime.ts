@@ -1,3 +1,5 @@
+import { setDefaultResultOrder } from 'node:dns'
+
 function disableBrowserStorageGlobals(): void {
   const globalObject = globalThis as Record<string, unknown>
 
@@ -21,4 +23,13 @@ function disableBrowserStorageGlobals(): void {
   }
 }
 
+function preferIpv4DnsResolution(): void {
+  try {
+    setDefaultResultOrder('ipv4first')
+  } catch {
+    // Older or restricted runtimes may not allow changing DNS result order.
+  }
+}
+
 disableBrowserStorageGlobals()
+preferIpv4DnsResolution()

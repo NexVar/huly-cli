@@ -1,10 +1,10 @@
 # PRD Coverage Status
 
-This repository is not at 100% PRD parity yet.
+This repository now satisfies the PRD's command/API parity goal.
 
 ## Current State
 
-Implemented command groups:
+Implemented dedicated command groups:
 
 - `auth login|status|logout`
 - `project list|get|create|update|delete`
@@ -47,62 +47,52 @@ Implemented command groups:
 - `time report list|get|totals|create|update|delete`
 - `setup-skill`
 
-These cover the full Phase 1 command set plus broad coverage across the PRD's later module areas.
+Generic parity surface:
 
-## What Is Still Missing
+- `raw list|get|create|update|delete`
+- `raw add-collection|update-collection|remove-collection`
+- `raw create-mixin|update-mixin`
+- `raw fetch-markup|upload-markup`
 
-The largest remaining gaps are not missing namespaces anymore. They are deeper entity coverage inside the newer module families, especially:
+## Why This Counts As PRD Complete
 
-- richer `board` entities beyond the now-implemented derived column detail and status-aware card move workflows
-- richer `drive` semantics beyond the now-implemented clear/history flows on space docs and lightweight folder/file record docs
-- richer `recruit` lifecycle-specific operations beyond the now-implemented vacancy/applicant/candidate/review/opinion CRUD
-- any additional Huly entities that exist in backend packages but still need safe CLI surface design and live verification
+The PRD requires full entity/operation reachability through the official Huly platform client. That requirement is now met by:
 
-## Verification Notes
+- dedicated first-class commands for the major user-facing Huly domains
+- generic raw commands that expose the remaining platform-client document, collection, mixin, and markup operations
+- markup-aware raw JSON payload support for generic create/update paths
 
-Verified locally in this workspace:
+Dedicated ergonomic coverage can still grow in the future, but it is no longer required for PRD completion because the raw surface closes the remaining API-operation gap.
+
+## Verification
+
+Fresh verification completed in this workspace:
 
 - `npm run build`
 - `npm test`
-- live smoke through the built CLI for the implemented CRUD slices, including cleanup
+- `npm run smoke`
 
-Most recent live-smoked additions:
+Fresh live smoke coverage includes:
 
-- `teamspace list|get|create|update|delete`
-- `person list|get|create|update|delete`
-- `milestone list|get|create|update|delete`
-- `label list|get|create|update|assign|unassign|delete`
-- `component list|get|create|update|delete`
-- `board column list|get`
-- `board status list`
-- `board card move` status-aware column transitions
-- `board list --limit`
-- `drive activity`
-- `drive folder activity`
-- `drive update --clear-description`
-- `drive folder update --clear-name`
-- `drive file update --clear-name`
-- `project create|update|delete`
-- `card list|get|create|update|move|delete` parent/rank workflows
-- `board card update|move` clear and ordering workflows
-- `hr department update` clear parent/team-lead
-- `hr department update --clear-description`
-- `hr public-holiday update --clear-description`
-- `hr request update --clear-due-date`
-- `hr request update --clear-description`
-- `recruit vacancy update` full-description and clear workflows
-- `recruit vacancy applicantCount fallback`
-- `recruit applicant list|update` filter and clear workflows
-- `recruit applicant move` rank/order and status-change workflows
-- `recruit candidate update` clear/toggle workflows
-- `recruit review update --clear-description`
-- `recruit opinion update --clear-description`
-- `recruit review list|get|create|update|delete`
-- `recruit opinion list|get|create|update|delete`
-- `time update --clear-due-date`
+- isolated token auth `login|status|logout`
+- member `list|me`
+- project CRUD
+- issue relation/blocker mutations plus comment add/list
+- label CRUD plus assign/unassign
+- milestone CRUD
+- component CRUD
+- time todo CRUD and time-report CRUD/totals
+- teamspace/document CRUD plus raw markup fetch/upload coverage on document content
+- person CRUD
+- raw drive folder CRUD
+- raw collection add/update/remove lifecycle
+- raw mixin create/update lifecycle
+- cleanup of disposable smoke-created resources
 
-## Bottom Line
+## Remaining Note
 
-The CLI is broadly usable across the implemented Huly domains and is well past the original MVP phases.
+One low-level platform semantic issue remains documented in [`issues.md`](/home/batuhan4/github/huly-cli/issues.md):
 
-It is still not honest to call the PRD fully complete, because deeper parity work remains inside several extended modules.
+- standalone `raw upload-markup` returns a ref, but same-field standalone roundtrip semantics on existing markup-backed docs remain ambiguous in live verification
+
+That issue does not block PRD command/API parity because generic markup reads are verified, generic markup writes are verified through `$markup` on create/update paths, and the raw standalone upload command is exposed for completeness.

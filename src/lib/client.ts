@@ -1,12 +1,11 @@
 import {
   createRestClient,
   createRestTxOperations,
-  getWorkspaceToken,
   loadServerConfig,
   MarkupContent
 } from '@hcengineering/api-client'
 import { getClient as getCollaboratorClient } from '@hcengineering/collaborator-client'
-import { generateId, makeCollabId, type Account, type Class, type Doc, type FindOptions, type FindResult, type ModelDb, type Ref, type WithLookup, type TxResult, type Space, type Data, type DocumentUpdate, type AttachedDoc, type AttachedData, type Hierarchy, type TxOperations } from '@hcengineering/core'
+import { generateId, makeCollabId, type Account, type Class, type Doc, type FindOptions, type FindResult, type ModelDb, type Ref, type WithLookup, type TxResult, type Space, type Data, type DocumentUpdate, type AttachedDoc, type AttachedData, type Hierarchy, type TxOperations, type Mixin, type MixinData, type MixinUpdate } from '@hcengineering/core'
 import { htmlToJSON, jsonToMarkup } from '@hcengineering/text'
 import { markdownToMarkup } from '@hcengineering/text-markdown'
 import { resolveAuthConfig } from './config'
@@ -15,8 +14,8 @@ import { CliError } from './output'
 import { retry } from './retry'
 import type { AuthConfig } from './types'
 
-const CONNECT_RETRIES = 2
-const CONNECT_RETRY_DELAY_MS = 250
+const CONNECT_RETRIES = 4
+const CONNECT_RETRY_DELAY_MS = 400
 
 async function withSuppressedBootstrapNoise<T>(fn: () => Promise<T>): Promise<T> {
   const originalStdoutWrite = process.stdout.write.bind(process.stdout)
@@ -65,15 +64,41 @@ export type HulyClient = {
     attributes: AttachedData<P>,
     id?: Ref<P>
   ) => Promise<Ref<P>>
+  updateCollection: <T extends Doc, P extends AttachedDoc>(
+    _class: Ref<Class<P>>,
+    space: Ref<Space>,
+    objectId: Ref<P>,
+    attachedTo: Ref<T>,
+    attachedToClass: Ref<Class<T>>,
+    collection: Extract<keyof T, string> | string,
+    operations: DocumentUpdate<P>,
+    retrieve?: boolean
+  ) => Promise<Ref<T>>
+  removeCollection: <T extends Doc, P extends AttachedDoc>(
+    _class: Ref<Class<P>>,
+    space: Ref<Space>,
+    objectId: Ref<P>,
+    attachedTo: Ref<T>,
+    attachedToClass: Ref<Class<T>>,
+    collection: Extract<keyof T, string> | string
+  ) => Promise<Ref<T>>
+  createMixin: <D extends Doc, M extends D>(
+    objectId: Ref<D>,
+    objectClass: Ref<Class<D>>,
+    objectSpace: Ref<Space>,
+    mixin: Ref<Mixin<M>>,
+    attributes: MixinData<D, M>
+  ) => Promise<TxResult>
+  updateMixin: <D extends Doc, M extends D>(
+    objectId: Ref<D>,
+    objectClass: Ref<Class<D>>,
+    objectSpace: Ref<Space>,
+    mixin: Ref<Mixin<M>>,
+    attributes: MixinUpdate<D, M>
+  ) => Promise<TxResult>
   fetchMarkup: (...args: Parameters<ReturnType<typeof createMarkupOperations>['fetchMarkup']>) => Promise<string>
   uploadMarkup: (...args: Parameters<ReturnType<typeof createMarkupOperations>['uploadMarkup']>) => Promise<any>
   close: () => Promise<void>
-}
-
-function toAuthOptions(config: AuthConfig): { workspace: string, token: string } | { workspace: string, email: string, password: string } {
-  return config.token !== undefined
-    ? { workspace: config.workspace, token: config.token }
-    : { workspace: config.workspace, email: config.email, password: config.password }
 }
 
 function isAuthErrorMessage(message: string): boolean {
@@ -111,17 +136,115 @@ function isRetryableConnectionError(error: unknown): boolean {
   return retryableMarkers.some((marker) => message.includes(marker))
 }
 
+function getTimezoneHeader(): Record<string, string> {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  return typeof timezone === 'string' && timezone.length > 0
+    ? { 'x-timezone': timezone }
+    : {}
+}
+
+async function callAccountRpc<T>(
+  accountsUrl: string,
+  method: string,
+  params: Record<string, unknown>,
+  token?: string
+): Promise<T> {
+  const response = await fetch(accountsUrl, {
+    keepalive: true,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Connection: 'keep-alive',
+      ...getTimezoneHeader(),
+      ...(token === undefined ? {} : { Authorization: `Bearer ${token}` })
+    },
+    body: JSON.stringify({ method, params })
+  })
+
+  const payload = await response.json() as {
+    result?: T
+    error?: unknown
+  }
+
+  if (payload.error !== undefined) {
+    throw new Error(`Account RPC ${method} failed: ${JSON.stringify(payload.error)}`)
+  }
+
+  if (payload.result === undefined) {
+    throw new Error(`Account RPC ${method} returned no result`)
+  }
+
+  return payload.result
+}
+
+async function resolveWorkspaceToken(
+  resolvedConfig: AuthConfig,
+  accountsUrl: string
+): Promise<{ endpoint: string, token: string, workspaceId: string }> {
+  let accountToken = resolvedConfig.token
+
+  if (accountToken === undefined) {
+    const login = await callAccountRpc<{ token?: string }>(
+      accountsUrl,
+      'login',
+      {
+        email: resolvedConfig.email,
+        password: resolvedConfig.password
+      }
+    )
+
+    if (typeof login.token !== 'string' || login.token.length === 0) {
+      throw new Error('Login failed')
+    }
+
+    accountToken = login.token
+  }
+
+  const workspace = await callAccountRpc<{
+    endpoint?: string
+    token?: string
+    workspace?: string
+  }>(
+    accountsUrl,
+    'selectWorkspace',
+    {
+      workspaceUrl: resolvedConfig.workspace,
+      kind: 'external',
+      externalRegions: []
+    },
+    accountToken
+  )
+
+  if (typeof workspace.endpoint !== 'string' || workspace.endpoint.length === 0) {
+    throw new Error('Workspace endpoint was not returned')
+  }
+
+  if (typeof workspace.token !== 'string' || workspace.token.length === 0) {
+    throw new Error('Workspace token was not returned')
+  }
+
+  if (typeof workspace.workspace !== 'string' || workspace.workspace.length === 0) {
+    throw new Error('Workspace id was not returned')
+  }
+
+  return {
+    endpoint: workspace.endpoint,
+    token: workspace.token,
+    workspaceId: workspace.workspace
+  }
+}
+
 async function connectClientOnce(resolvedConfig: AuthConfig): Promise<{ client: HulyClient, config: AuthConfig }> {
   const serverConfig = await loadServerConfig(resolvedConfig.url)
-  const workspaceToken = await getWorkspaceToken(resolvedConfig.url, toAuthOptions(resolvedConfig), serverConfig)
+  const workspaceToken = await resolveWorkspaceToken(resolvedConfig, serverConfig.ACCOUNTS_URL)
   const markupOps = createMarkupOperations(
     resolvedConfig.url,
-    workspaceToken.workspaceId,
+    workspaceToken.workspaceId as never,
     workspaceToken.token,
     serverConfig
   )
   const collaborator = getCollaboratorClient(
-    workspaceToken.workspaceId,
+    workspaceToken.workspaceId as never,
     workspaceToken.token,
     serverConfig.COLLABORATOR_URL
   )
@@ -239,6 +362,52 @@ async function connectClientOnce(resolvedConfig: AuthConfig): Promise<{ client: 
         collection,
         processedAttributes as AttachedData<any>,
         docId
+      )
+    },
+    updateCollection: async (_class, space, objectId, attachedTo, attachedToClass, collection, operations, retrieve) => {
+      const processedOperations = await processUpdateMarkup(
+        _class as Ref<Class<Doc>>,
+        objectId as Ref<Doc>,
+        operations as Record<string, unknown>
+      )
+      return await (await getTxOps()).updateCollection(
+        _class,
+        space,
+        objectId,
+        attachedTo,
+        attachedToClass,
+        collection,
+        processedOperations as DocumentUpdate<any>,
+        retrieve
+      )
+    },
+    removeCollection: async (...args) => await (await getTxOps()).removeCollection(...args),
+    createMixin: async (objectId, objectClass, objectSpace, mixin, attributes) => {
+      const processedAttributes = await processCreateMarkup(
+        objectClass as Ref<Class<Doc>>,
+        objectId as Ref<Doc>,
+        attributes as Record<string, unknown>
+      )
+      return await (await getTxOps()).createMixin(
+        objectId,
+        objectClass,
+        objectSpace,
+        mixin,
+        processedAttributes as MixinData<any, any>
+      )
+    },
+    updateMixin: async (objectId, objectClass, objectSpace, mixin, attributes) => {
+      const processedAttributes = await processUpdateMarkup(
+        objectClass as Ref<Class<Doc>>,
+        objectId as Ref<Doc>,
+        attributes as Record<string, unknown>
+      )
+      return await (await getTxOps()).updateMixin(
+        objectId,
+        objectClass,
+        objectSpace,
+        mixin,
+        processedAttributes as MixinUpdate<any, any>
       )
     },
     fetchMarkup: async (...args) => await markupOps.fetchMarkup(...args),

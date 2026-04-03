@@ -935,6 +935,12 @@ test('main returns JSON for raw help', async () => {
   assert.ok(payload.data.commands.some((command) => command.name === 'update'))
   assert.ok(payload.data.commands.some((command) => command.name === 'delete'))
   assert.ok(payload.data.commands.some((command) => command.name === 'add-collection'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'update-collection'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'remove-collection'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'create-mixin'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'update-mixin'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'fetch-markup'))
+  assert.ok(payload.data.commands.some((command) => command.name === 'upload-markup'))
 })
 
 test('main returns JSON for raw list help with class and query options', async () => {
@@ -957,6 +963,7 @@ test('main returns JSON for raw list help with class and query options', async (
   assert.ok(payload.data.options.some((option) => option.flags.startsWith('--class ')))
   assert.ok(payload.data.options.some((option) => option.flags.startsWith('--query ')))
   assert.ok(payload.data.options.some((option) => option.flags.startsWith('--options ')))
+  assert.ok(payload.data.options.some((option) => option.flags.startsWith('--markup-fields ')))
 })
 
 test('main rejects invalid raw list query JSON', async () => {
@@ -1009,6 +1016,184 @@ test('main rejects invalid raw create data JSON', async () => {
     assert.equal(payload.error.code, 'VALIDATION_ERROR')
     assert.match(payload.error.message, /--data/)
     assert.match(payload.error.message, /json/i)
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
+})
+
+test('main rejects invalid raw update-collection operations JSON', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main(['node', 'huly', 'raw', 'update-collection', '--operations', '{'])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.match(payload.error.message, /--operations/)
+    assert.match(payload.error.message, /json/i)
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
+})
+
+test('main rejects invalid raw create-mixin data JSON', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main(['node', 'huly', 'raw', 'create-mixin', '--data', '{'])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.match(payload.error.message, /--data/)
+    assert.match(payload.error.message, /json/i)
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
+})
+
+test('main rejects invalid raw markup format', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main([
+        'node',
+        'huly',
+        'raw',
+        'create',
+        '--data',
+        JSON.stringify({
+          description: {
+            $markup: {
+              format: 'invalid',
+              content: 'body'
+            }
+          }
+        })
+      ])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.match(payload.error.message, /\$markup\.format/)
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
+})
+
+test('main rejects invalid raw markup-fields format', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main([
+        'node',
+        'huly',
+        'raw',
+        'get',
+        '--class',
+        'document:class:Document',
+        '--id',
+        'doc-id',
+        '--markup-fields',
+        'content:invalid'
+      ])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.match(payload.error.message, /--markup-fields/)
+    assert.match(payload.error.message, /markdown, html, or markup/)
+    assert.equal(process.exitCode, 4)
+  } finally {
+    process.exitCode = originalExitCode
+  }
+})
+
+test('main rejects invalid raw fetch-markup format', async () => {
+  const originalExitCode = process.exitCode
+
+  try {
+    process.exitCode = undefined
+
+    const { stderr } = await captureStreams(async () => {
+      await main([
+        'node',
+        'huly',
+        'raw',
+        'fetch-markup',
+        '--object-id',
+        'doc-id',
+        '--object-class',
+        'document:class:Document',
+        '--attribute',
+        'content',
+        '--ref',
+        'blob-id',
+        '--format',
+        'invalid'
+      ])
+    })
+
+    const payload = JSON.parse(stderr) as {
+      ok: boolean
+      error: {
+        code: string
+        message: string
+      }
+    }
+
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error.code, 'VALIDATION_ERROR')
+    assert.match(payload.error.message, /--format/)
     assert.equal(process.exitCode, 4)
   } finally {
     process.exitCode = originalExitCode

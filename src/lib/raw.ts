@@ -1,15 +1,23 @@
-import type { AttachedData, AttachedDoc, Class, Data, Doc, DocumentUpdate, FindOptions, Ref, Space } from '@hcengineering/core'
+import { MarkupContent, type MarkupFormat } from '@hcengineering/api-client'
+import type { AttachedData, AttachedDoc, Class, Data, Doc, DocumentUpdate, FindOptions, Mixin, MixinData, MixinUpdate, Ref, Space } from '@hcengineering/core'
 import type { HulyClient } from './client'
 import { CliError } from './output'
 
 type JsonObject = Record<string, unknown>
+type RawMarkupField = {
+  field: string
+  format: MarkupFormat
+}
 
 type RawOperationResult = {
-  operation: 'create' | 'update' | 'delete' | 'add-collection'
+  operation: 'create' | 'update' | 'delete' | 'add-collection' | 'update-collection' | 'remove-collection' | 'create-mixin' | 'update-mixin'
   space?: string
   attachedTo?: string
   attachedToClass?: string
   collection?: string
+  objectId?: string
+  objectClass?: string
+  mixin?: string
 }
 
 type RawMutationResponse = {
@@ -17,6 +25,15 @@ type RawMutationResponse = {
   class: string
   result: RawOperationResult
   tx?: unknown
+}
+
+type RawMarkupPayload = {
+  objectId: string
+  objectClass: string
+  attribute: string
+  format: MarkupFormat
+  ref?: string
+  content?: string
 }
 
 function isJsonObject(value: unknown): value is JsonObject {
@@ -29,6 +46,93 @@ function parseJsonFlag(value: string, flagName: string): unknown {
   } catch {
     throw new CliError('VALIDATION_ERROR', `Invalid ${flagName} value: expected valid JSON.`, 4)
   }
+}
+
+function isMarkupFormat(value: string): value is MarkupFormat {
+  return value === 'markdown' || value === 'html' || value === 'markup'
+}
+
+export function parseRawMarkupFieldsFlag(value: string | undefined): RawMarkupField[] {
+  if (value === undefined) {
+    return []
+  }
+
+  const entries = value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+
+  if (entries.length === 0) {
+    throw new CliError('VALIDATION_ERROR', 'Invalid --markup-fields value: expected one or more field names.', 4)
+  }
+
+  return entries.map((entry) => {
+    const [field, formatCandidate] = entry.split(':', 2)
+
+    if (field === undefined || field.trim() === '') {
+      throw new CliError('VALIDATION_ERROR', `Invalid --markup-fields entry '${entry}': field name is required.`, 4)
+    }
+
+    const format = formatCandidate?.trim() ?? 'markdown'
+    if (!isMarkupFormat(format)) {
+      throw new CliError('VALIDATION_ERROR', `Invalid --markup-fields entry '${entry}': format must be markdown, html, or markup.`, 4)
+    }
+
+    return {
+      field: field.trim(),
+      format
+    }
+  })
+}
+
+export function parseMarkupFormatFlag(value: string | undefined, flagName: string): MarkupFormat {
+  const format = value ?? 'markdown'
+
+  if (!isMarkupFormat(format)) {
+    throw new CliError('VALIDATION_ERROR', `Invalid ${flagName} value: expected one of "markdown", "html", or "markup".`, 4)
+  }
+
+  return format
+}
+
+function toMarkupContent(value: unknown, flagName: string, path: string): MarkupContent {
+  if (!isJsonObject(value)) {
+    throw new CliError('VALIDATION_ERROR', `Invalid ${flagName} value${path}: expected "$markup" to be an object.`, 4)
+  }
+
+  const content = value.content
+  const format = value.format ?? 'markdown'
+
+  if (typeof content !== 'string') {
+    throw new CliError('VALIDATION_ERROR', `Invalid ${flagName} value${path}: expected "$markup.content" to be a string.`, 4)
+  }
+
+  if (typeof format !== 'string' || !isMarkupFormat(format)) {
+    throw new CliError('VALIDATION_ERROR', `Invalid ${flagName} value${path}: expected "$markup.format" to be one of "markdown", "html", or "markup".`, 4)
+  }
+
+  return new MarkupContent(content, format)
+}
+
+function transformMarkupValues(value: unknown, flagName: string, path = ''): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry, index) => transformMarkupValues(entry, flagName, `${path}[${index}]`))
+  }
+
+  if (!isJsonObject(value)) {
+    return value
+  }
+
+  if ('$markup' in value) {
+    return toMarkupContent(value.$markup, flagName, path)
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      transformMarkupValues(entry, flagName, path === '' ? `.${key}` : `${path}.${key}`)
+    ])
+  )
 }
 
 function requireJsonObject(value: unknown, flagName: string): JsonObject {
@@ -56,11 +160,11 @@ export function parseOptionalJsonObjectFlag(value: string | undefined, flagName:
     return undefined
   }
 
-  return requireJsonObject(parseJsonFlag(value, flagName), flagName)
+  return requireJsonObject(transformMarkupValues(parseJsonFlag(value, flagName), flagName), flagName)
 }
 
 export function parseRequiredJsonObjectFlag(value: string, flagName: string): JsonObject {
-  return requireJsonObject(parseJsonFlag(value, flagName), flagName)
+  return requireJsonObject(transformMarkupValues(parseJsonFlag(value, flagName), flagName), flagName)
 }
 
 export function requireFlagValue(value: string | undefined, flagName: string): string {
@@ -75,16 +179,28 @@ export async function listRawDocuments(
   client: HulyClient,
   className: string,
   query: JsonObject | undefined,
-  options: JsonObject | undefined
+  options: JsonObject | undefined,
+  markupFields: RawMarkupField[] = []
 ): Promise<unknown[]> {
-  return await client.findAll(
+  const docs = await client.findAll(
     className as Ref<Class<Doc>>,
     (query ?? {}) as never,
     options as FindOptions<Doc> | undefined
   ) as unknown[]
+
+  if (markupFields.length === 0) {
+    return docs
+  }
+
+  return await Promise.all(docs.map(async (doc) => await resolveRawMarkupFields(client, className, doc, markupFields)))
 }
 
-export async function getRawDocument(client: HulyClient, className: string, id: string): Promise<unknown> {
+export async function getRawDocument(
+  client: HulyClient,
+  className: string,
+  id: string,
+  markupFields: RawMarkupField[] = []
+): Promise<unknown> {
   const doc = await client.findOne(
     className as Ref<Class<Doc>>,
     { _id: id as never }
@@ -94,7 +210,11 @@ export async function getRawDocument(client: HulyClient, className: string, id: 
     throw new CliError('NOT_FOUND', `Document '${id}' not found in class '${className}'.`, 3)
   }
 
-  return doc
+  if (markupFields.length === 0) {
+    return doc
+  }
+
+  return await resolveRawMarkupFields(client, className, doc, markupFields)
 }
 
 export async function createRawDocument(
@@ -201,5 +321,218 @@ export async function addRawCollectionDocument(
       attachedToClass,
       collection
     }
+  }
+}
+
+export async function updateRawCollectionDocument(
+  client: HulyClient,
+  className: string,
+  space: string,
+  id: string,
+  attachedTo: string,
+  attachedToClass: string,
+  collection: string,
+  operations: JsonObject
+): Promise<RawMutationResponse> {
+  const parentId = await client.updateCollection(
+    className as Ref<Class<AttachedDoc>>,
+    space as Ref<Space>,
+    id as Ref<AttachedDoc>,
+    attachedTo as Ref<Doc>,
+    attachedToClass as Ref<Class<Doc>>,
+    collection,
+    operations as DocumentUpdate<AttachedDoc>
+  )
+
+  return {
+    id,
+    class: className,
+    result: {
+      operation: 'update-collection',
+      space,
+      attachedTo: parentId as string,
+      attachedToClass,
+      collection
+    }
+  }
+}
+
+export async function removeRawCollectionDocument(
+  client: HulyClient,
+  className: string,
+  space: string,
+  id: string,
+  attachedTo: string,
+  attachedToClass: string,
+  collection: string
+): Promise<RawMutationResponse> {
+  const parentId = await client.removeCollection(
+    className as Ref<Class<AttachedDoc>>,
+    space as Ref<Space>,
+    id as Ref<AttachedDoc>,
+    attachedTo as Ref<Doc>,
+    attachedToClass as Ref<Class<Doc>>,
+    collection
+  )
+
+  return {
+    id,
+    class: className,
+    result: {
+      operation: 'remove-collection',
+      space,
+      attachedTo: parentId as string,
+      attachedToClass,
+      collection
+    }
+  }
+}
+
+export async function createRawMixin(
+  client: HulyClient,
+  objectId: string,
+  objectClass: string,
+  objectSpace: string,
+  mixin: string,
+  data: JsonObject
+): Promise<RawMutationResponse> {
+  const operationResult = await client.createMixin(
+    objectId as Ref<Doc>,
+    objectClass as Ref<Class<Doc>>,
+    objectSpace as Ref<Space>,
+    mixin as Ref<Mixin<Doc>>,
+    data as MixinData<Doc, Doc>
+  )
+  const tx = extractTx(operationResult)
+
+  return {
+    id: objectId,
+    class: objectClass,
+    result: {
+      operation: 'create-mixin',
+      space: objectSpace,
+      objectId,
+      objectClass,
+      mixin
+    },
+    ...(tx === undefined ? {} : { tx })
+  }
+}
+
+export async function updateRawMixin(
+  client: HulyClient,
+  objectId: string,
+  objectClass: string,
+  objectSpace: string,
+  mixin: string,
+  operations: JsonObject
+): Promise<RawMutationResponse> {
+  const operationResult = await client.updateMixin(
+    objectId as Ref<Doc>,
+    objectClass as Ref<Class<Doc>>,
+    objectSpace as Ref<Space>,
+    mixin as Ref<Mixin<Doc>>,
+    operations as MixinUpdate<Doc, Doc>
+  )
+  const tx = extractTx(operationResult)
+
+  return {
+    id: objectId,
+    class: objectClass,
+    result: {
+      operation: 'update-mixin',
+      space: objectSpace,
+      objectId,
+      objectClass,
+      mixin
+    },
+    ...(tx === undefined ? {} : { tx })
+  }
+}
+
+async function resolveRawMarkupFields(
+  client: HulyClient,
+  className: string,
+  doc: unknown,
+  markupFields: RawMarkupField[]
+): Promise<unknown> {
+  if (!isJsonObject(doc)) {
+    return doc
+  }
+
+  const objectId = doc._id
+  if (typeof objectId !== 'string' || objectId.length === 0) {
+    return doc
+  }
+
+  const resolved = { ...doc }
+
+  await Promise.all(markupFields.map(async ({ field, format }) => {
+    const value = doc[field]
+
+    if (typeof value !== 'string' || value.length === 0) {
+      return
+    }
+
+    resolved[field] = await client.fetchMarkup(
+      className as Ref<Class<Doc>>,
+      objectId as Ref<Doc>,
+      field,
+      value as never,
+      format
+    )
+  }))
+
+  return resolved
+}
+
+export async function fetchRawMarkup(
+  client: HulyClient,
+  objectClass: string,
+  objectId: string,
+  attribute: string,
+  ref: string,
+  format: MarkupFormat
+): Promise<RawMarkupPayload> {
+  const content = await client.fetchMarkup(
+    objectClass as Ref<Class<Doc>>,
+    objectId as Ref<Doc>,
+    attribute,
+    ref as never,
+    format
+  )
+
+  return {
+    objectId,
+    objectClass,
+    attribute,
+    ref,
+    format,
+    content
+  }
+}
+
+export async function uploadRawMarkup(
+  client: HulyClient,
+  objectClass: string,
+  objectId: string,
+  attribute: string,
+  content: string,
+  format: MarkupFormat
+): Promise<RawMarkupPayload> {
+  const ref = await client.uploadMarkup(
+    objectClass as Ref<Class<Doc>>,
+    objectId as Ref<Doc>,
+    attribute,
+    content,
+    format
+  )
+
+  return {
+    objectId,
+    objectClass,
+    attribute,
+    format,
+    ref: ref as string
   }
 }

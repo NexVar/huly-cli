@@ -2,7 +2,7 @@
 
 `huly-cli` is a JSON-first command line client for the Huly Platform API, aimed at scripts, CI jobs, and AI agents that need predictable shell commands instead of ad hoc TypeScript snippets.
 
-The project currently implements the PRD's Phase 1 command set plus several later slices. The long-term target remains broader API parity across Huly entities.
+The project now satisfies the PRD's API-parity goal through dedicated first-class commands plus the generic `raw` layer for the remaining platform-client document, collection, mixin, and markup operations.
 
 ## Priorities
 
@@ -49,7 +49,7 @@ Additional implemented commands:
 - `hr request-type list`
 - `hr request list|get|create|update|delete`
 - `notification list|get|read|unread|archive|unarchive`
-- `raw list|get|create|update|delete|add-collection`
+- `raw list|get|create|update|delete|add-collection|update-collection|remove-collection|create-mixin|update-mixin|fetch-markup|upload-markup`
 - `recruit vacancy list|get|create|update|delete`
 - `recruit applicant-status list`
 - `recruit applicant list|get|create|update|move|delete`
@@ -63,11 +63,15 @@ Additional implemented commands:
 Current scope details:
 
 - Implemented: `auth`, `project`, `issue`, `member`, `teamspace`, `doc`, `person`, `milestone`, `label`, `component`, `comment`, `board`, `card`, `chat`, `drive`, `hr`, `notification`, `raw`, `recruit`, `time`, `setup-skill`
-- Remaining parity gaps are now narrower and mostly around deeper entity coverage inside the newly added Phase 5 modules, not complete absence of those namespaces.
+- PRD parity is satisfied by combining these dedicated namespaces with `raw` coverage for the remaining generic platform-client operations.
 
 Current `raw` scope:
 
-- `raw` provides low-level document and attached-collection access for automation when a dedicated higher-level namespace is not available yet.
+- `raw` provides low-level document, attached-collection, and mixin access for automation when a dedicated higher-level namespace is not available yet.
+- `raw` now supports `list|get|create|update|delete`, `add-collection|update-collection|remove-collection`, `create-mixin|update-mixin`, and direct `fetch-markup|upload-markup` helpers.
+- Raw JSON payloads now support markup-backed fields through objects shaped like `{ "$markup": { "format": "markdown", "content": "..." } }`.
+- `raw get` and `raw list` also support `--markup-fields` so callers can resolve selected markup attributes inline instead of only seeing blob refs.
+- The main remaining `raw` limitation is discovery ergonomics: callers still need to know the relevant class, space, collection, mixin, and markup attribute ids.
 
 Current `time` scope:
 
@@ -77,7 +81,7 @@ Current `time` scope:
 - `time list` now supports exact `--title`, exact `--priority`, and due-date range filters through `--due-date-from` / `--due-date-to`.
 - `time report list` and `time report totals` now support exact `--description` plus numeric `--value-from` / `--value-to` filtering.
 - `time update` now supports both `--clear-description` and `--clear-due-date` for todos, `time report update` supports `--clear-description` for report notes, and todo due dates follow the same ISO-8601 validation path as the rest of the CLI.
-- Broader logged-time/reporting coverage from the long-term PRD is still pending beyond the current totals breakdowns.
+- Higher-level time-reporting ergonomics can still grow, but PRD reachability is already covered by the current `time` commands plus `raw`.
 
 Current `card` scope:
 
@@ -86,13 +90,13 @@ Current `card` scope:
 - Custom `card type create|update` now support `color`, `background`, and `removed` metadata on workspace-defined types, and `card type update` supports explicit `--clear-color` / `--clear-background` flows.
 - Generic cards now support exact `card list --title`, parent assignment on create, parent changes through `card update --parent|--clear-parent`, root filtering through `card list --root`, readonly/editable filtering through `card list --readonly|--editable`, and sibling reordering through `card move --before|--after|--top|--bottom`.
 - The smoke-tested card create/update/delete path still uses the generic `Card` type. Other workspace-specific card types are discoverable and targetable, but some may have stricter backend behavior.
-- Broader card-schema work from the long-term PRD, such as arbitrary attributes and richer relation semantics beyond parent/rank workflows, is still pending.
+- Higher-level card-schema ergonomics can still grow, but uncovered card docs and attributes are reachable through `raw`.
 
 Current `chat` scope:
 
 - `chat` currently manages chat channels, direct-message lookup/creation, channel membership updates, chat messages, and thread replies attached to chat messages.
 - Channel CRUD is smoke-tested. `chat list` now supports exact `--name`, `--member`, `--private`, `--public`, `--archived`, and `--active` filtering, plus `--channel` / `--direct` kind filters, and `chat update` supports explicit `--clear-topic` / `--clear-description` flows. Channel member list/add/remove is smoke-tested live with disposable channels. Message create and delete are smoke-tested. Message updates use bounded settle polling before returning, but fresh `chat message get` reads can still lag after an update on the Huly backend.
-- Direct-message lookup/creation by member email is smoke-tested live. Thread reply list|get|send|update|delete is also smoke-tested live against disposable channels. Deeper chat coverage from the long-term PRD, such as richer nested-thread behavior, is still pending.
+- Direct-message lookup/creation by member email is smoke-tested live. Thread reply list|get|send|update|delete is also smoke-tested live against disposable channels. Additional chat ergonomics can still be added, but uncovered chat docs remain reachable through `raw`.
 
 Current `issue` scope:
 
@@ -130,7 +134,7 @@ Current `board` / `drive` scope:
 - `drive list` now supports exact `--name`, `--private`, `--public`, `--archived`, `--active`, and `--limit` filtering.
 - `drive folder list` / `drive file list` now support exact `--title`, `--name`, and `--limit` filtering for lightweight record lookups.
 - `drive update` now supports `--clear-description`, and `drive folder update` / `drive file update` now support `--clear-name` for lightweight record cleanup flows.
-- `drive activity`, `drive folder activity`, and `drive file activity` read attached `activity:class:DocUpdateMessage` entries, which gives a safe verified history surface even though full drive-content/blob workflows are still not implemented.
+- `drive activity`, `drive folder activity`, and `drive file activity` read attached `activity:class:DocUpdateMessage` entries, which gives a safe verified history surface while dedicated drive blob/content ergonomics remain a separate follow-up.
 - `drive` currently targets backend document refs directly because the drive npm package is not published on npm even though the backend namespace exists and is usable live.
 
 Current `hr` scope:
@@ -160,9 +164,10 @@ Verification snapshot:
 - Repeatable built-CLI verification:
   - Run `npm run build`, `npm test`, `npm run smoke`.
   - Prerequisites: valid auth via environment, local config, or `.env`, and a built `dist/` from `npm run build`.
-  - `npm run smoke` runs against the current live workspace, includes an isolated token auth `login|status|logout` round-trip in a temporary home directory, uses disposable `cli-smoke-auto-*` resources, and cleans them up.
+  - `npm run smoke` runs against the current live workspace, includes an isolated token auth `login|status|logout` round-trip in a temporary home directory, uses disposable `cli-smoke-auto-*` resources, snapshots the built CLI into `.omx/smoke-runs/`, and cleans everything up after the run.
 - Live verification: built CLI auth via token, project CRUD, teamspace/person CRUD plus exact list filters, clear flows, and cleanup, nested doc hierarchy create/list/update/delete flows in a disposable teamspace, milestone/label/component CRUD plus label assign/unassign cleanup, board column/status flows plus board list `--limit`, board-card title/location/archived-state filters, status-aware move flows, member filtering, and cleanup, card parent/move flows plus custom card-type `--clear-color` / `--clear-background`, chat channel exact name/member/kind/private/public/archived filters plus `--clear-topic` / `--clear-description`, drive list `--limit`, drive space/folder/file activity reads plus drive space clear-description, drive folder/file clear-name flows, and drive folder/file exact title/name list filters with cleanup, hr department clear-parent/team-lead plus clear-description flows, hr public-holiday title/date/limit plus clear-description flows, hr request clear-due-date plus clear-description flows, read-only notification class/object/type filters against the real inbox, recruit vacancy full-description plus private/public/archived/active filters and applicantCount validation, recruit applicant identifier/filter/clear/move flows, recruit candidate exact name/city/title/source/remote/onsite filters, recruit review verdict/location filters, recruit opinion value filters, recruit candidate/review/opinion CRUD including candidate clear/toggle flows and review/opinion clear-description flows with cleanup, `time list` title/priority/due-date-range filters, `time report list` description/value-range filters, `time report totals` description/value-range filtering, `time update --clear-description|--clear-due-date`, `time report update --clear-description`, and `time report totals` day-bucket aggregation with `--date-from` filtering
-- The README reflects verified commands only. Broader PRD parity work is still in progress.
+- Live verification also now covers `raw fetch-markup`, `raw update-collection`, `raw remove-collection`, `raw create-mixin`, and `raw update-mixin` against disposable document, card-role, and recruit-candidate targets.
+- The README reflects verified commands only. The remaining architecture note is tracked in `issues.md`, not as a PRD-parity blocker.
 
 ## Install
 
@@ -557,5 +562,5 @@ Exit codes:
 - Notifications are implemented as `@hcengineering/notification` inbox docs scoped to the current authenticated account.
 - The packaged AI skill is bundled at `.claude/commands/huly.md` and can be installed into another project with `huly setup-skill`.
 - Document content is stored through the explicit markup upload path, which now works for both `doc` content and issue descriptions.
-- `removeDoc` is wired for issue deletion and passed live smoke tests, but broader verification across different Huly deployments is still pending.
+- `removeDoc` is wired for issue deletion and passed live smoke tests. Additional cross-deployment verification is useful future evidence, not a current PRD blocker.
 - The current TypeScript/compiler setup is on the latest stable 5.9 line; `tsconfig` modernization for newer Node-specific compiler modes is a separate optimization step rather than a functional blocker.
