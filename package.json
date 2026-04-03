@@ -1,5 +1,5 @@
 {
-  "name": "huly",
+  "name": "@nexvar/huly",
   "version": "1.0.0",
   "description": "CLI for the Huly Platform API with JSON-first output",
   "keywords": [

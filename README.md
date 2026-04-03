@@ -179,13 +179,13 @@ npm run build
 Install from npm after publish:
 
 ```bash
-npm install -g huly
+npm install -g @nexvar/huly
 ```
 
 Run without global install:
 
 ```bash
-npx huly --help
+npx @nexvar/huly --help
 ```
 
 Tooling baseline:
